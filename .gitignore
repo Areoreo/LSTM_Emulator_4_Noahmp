@@ -1,0 +1,12 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# custom
+data/
+models/
+inference/
+results/
+.claude/
+devlog/score_function_val/
+
+__pycache__/
+
