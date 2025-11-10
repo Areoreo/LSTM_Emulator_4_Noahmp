@@ -34,6 +34,7 @@ python analyze_results.py
 ## Project Overview
 
 ### Problem Statement
+
 - **Input**: Time series of physical variables (soil moisture, latent heat, sensible heat) at daily resolution
 - **Output**: 13 NoahMP model parameters that generated these simulations
 - **Approach**: Use bidirectional LSTM to capture temporal patterns and predict parameters
@@ -41,6 +42,7 @@ python analyze_results.py
 ### Data Description
 
 #### Input Data (Time Series)
+
 - **SOIL_M**: Volumetric soil moisture (m³/m³) - first soil layer
 - **LH**: Latent heat flux (W/m²)
 - **HFX**: Sensible heat flux (W/m²)
@@ -49,7 +51,9 @@ python analyze_results.py
 Data shape: `(n_samples, n_variables, n_timesteps)` = `(144, 4, 366)`
 
 #### Output Data (Parameters)
+
 13 NoahMP parameters:
+
 - `VCMX25_EBF`: Maximum carboxylation rate
 - `HVT_EBF`, `HVB_EBF`: Vegetation height parameters
 - `CWPVT_EBF`: Canopy wind parameter
@@ -94,6 +98,7 @@ LSTM_Emulator/
 ## Installation & Setup
 
 ### Environment Setup
+
 ```bash
 # Activate conda environment
 conda activate dfm
@@ -113,6 +118,7 @@ conda activate dfm
 ### 0. Configuration (Optional)
 
 All settings are controlled via `config.py`. Edit this file to:
+
 - Add or remove input variables
 - Change model architecture
 - Adjust training hyperparameters
@@ -125,11 +131,13 @@ python config.py
 **See [USAGE_GUIDE.md](USAGE_GUIDE.md) for examples of adding variables like LWFORC, SWFORC, RAINRATE, T2MV, etc.**
 
 ### 1. Data Preprocessing
+
 ```bash
 python data_preprocessing.py
 ```
 
 This script:
+
 - Loads simulation results from NetCDF files
 - Extracts variables specified in `config.py`
 - Aggregates 30-min data to daily resolution (using specified aggregation methods)
@@ -139,11 +147,13 @@ This script:
 **Default configuration**: 3 physical variables + day of year = 4 input features
 
 ### 2. Model Training
+
 ```bash
 python train.py
 ```
 
 This script:
+
 - Loads preprocessed data
 - Creates train/validation split (ratio from config)
 - Trains LSTM model with early stopping
@@ -153,54 +163,22 @@ This script:
 **All hyperparameters are controlled via `config.py`**
 
 ### 3. Results Analysis
+
 ```bash
 python analyze_results.py
 ```
 
 This script:
+
 - Generates detailed performance report
 - Creates R² comparison plots
 - Exports summary statistics to CSV
 - Prints comprehensive analysis
 
-## Results
-
-### Model Performance
-
-**Overall Metrics**:
-- Validation RMSE: 0.915
-- Validation MAE: 0.765
-- Mean R²: 0.110
-
-**Best Predicted Parameters** (R² > 0.7):
-- `VCMX25_EBF`: R² = 0.804
-- `MAXSMC_CL`: R² = 0.755
-
-**Poorest Predicted Parameters** (R² < 0):
-- `SATDK_SCL`: R² = -0.162
-- `WLTSMC_SCL`: R² = -0.124
-- `MAXSMC_SCL`: R² = -0.028
-
-### Performance Summary
-- **Good predictions** (R² > 0.7): 2 parameters
-- **Fair predictions** (0.3 < R² < 0.7): 0 parameters
-- **Poor predictions** (0 < R² < 0.3): 5 parameters
-- **Bad predictions** (R² < 0): 6 parameters
-
-### Key Findings
-
-1. **Some parameters are well-constrained**: VCMX25_EBF and MAXSMC_CL show strong predictability (R² > 0.75), suggesting these parameters have clear signatures in the output variables.
-
-2. **Many parameters are poorly identifiable**: 6 out of 13 parameters have negative R² scores, indicating they cannot be reliably estimated from the available outputs. This is typical for inverse problems where:
-   - Multiple parameter sets produce similar outputs (equifinality)
-   - Some parameters have weak influence on the observed variables
-   - Limited observational data
-
-3. **Vegetation vs. Soil parameters**: The best-predicted parameter (VCMX25_EBF) is vegetation-related, while many soil parameters (especially sandy clay) are poorly predicted.
-
 ## Model Architecture
 
 ### LSTMParameterPredictor
+
 ```
 Input: (batch_size, seq_len=366, input_dim=4)
 ↓
@@ -219,24 +197,40 @@ Output: (batch_size, 13) parameter predictions
 
 **Total parameters**: 211,469
 
-### Alternative: BiLSTMParameterPredictor
-A bidirectional LSTM variant is also available in `lstm_model.py` for comparison.
+### Alternative Model Architectures
+
+Two additional model variants are available in `lstm_model.py` for comparison:
+
+1. **BiLSTMParameterPredictor**: Bidirectional LSTM that processes sequences in both forward and backward directions
+2. **AttentionLSTMParameterPredictor**: LSTM with attention mechanism that learns to focus on the most relevant timesteps
+
+To use a different model, change `model_type` in `config.py`:
+
+```python
+MODEL_CONFIG = {
+    'model_type': 'AttentionLSTM',  # Options: 'LSTM', 'BiLSTM', 'AttentionLSTM'
+    ...
+}
+```
 
 ## Improvements & Future Work
 
 ### Data-Related
+
 1. **More samples**: 144 samples is limited for deep learning
 2. **Additional variables**: Include more output variables (e.g., runoff, evapotranspiration)
 3. **Multi-site data**: Use data from different locations/conditions
 4. **Data augmentation**: Generate synthetic samples
 
 ### Model-Related
+
 1. **Ensemble methods**: Train multiple models and average predictions
-2. **Attention mechanisms**: Add attention to focus on important time periods
-3. **Physics-informed constraints**: Incorporate physical constraints on parameters
-4. **Uncertainty quantification**: Estimate prediction uncertainty
+2. **Physics-informed constraints**: Incorporate physical constraints on parameters
+3. **Uncertainty quantification**: Estimate prediction uncertainty
+4. **Multi-head attention**: Extend attention mechanism to multi-head architecture
 
 ### Problem Formulation
+
 1. **Parameter subset selection**: Focus on identifiable parameters only
 2. **Hierarchical approach**: Predict parameter groups sequentially
 3. **Multi-task learning**: Jointly predict parameters and reconstruct outputs
@@ -245,11 +239,13 @@ A bidirectional LSTM variant is also available in `lstm_model.py` for comparison
 ## Technical Details
 
 ### Data Normalization
+
 - **Inputs**: Standardized to zero mean, unit variance per variable
 - **Outputs**: Standardized to zero mean, unit variance per parameter
 - Statistics saved for inverse transformation
 
 ### Training Strategy
+
 - **Loss function**: MSE (Mean Squared Error)
 - **Optimizer**: Adam
 - **Learning rate scheduler**: ReduceLROnPlateau (factor=0.5, patience=10)
@@ -257,12 +253,14 @@ A bidirectional LSTM variant is also available in `lstm_model.py` for comparison
 - **Best model**: Saved based on minimum validation loss
 
 ### Reproducibility
+
 - Random seed: 42 (set for PyTorch and NumPy)
 - Device: CUDA (GPU) if available, else CPU
 
 ## References
 
 This is an inverse problem in hydrological modeling, related to:
+
 - Parameter estimation in land surface models
 - Data assimilation
 - Model calibration
@@ -279,4 +277,5 @@ This is an inverse problem in hydrological modeling, related to:
 For questions or issues, please refer to the project documentation or contact the development team.
 
 ---
-*Generated using PyTorch 2.4.1 with CUDA support*
+
+_Generated using PyTorch 2.4.1 with CUDA support_

@@ -14,7 +14,7 @@ from pathlib import Path
 import json
 from datetime import datetime
 
-from lstm_model import LSTMParameterPredictor, BiLSTMParameterPredictor
+from lstm_model import LSTMParameterPredictor, BiLSTMParameterPredictor, AttentionLSTMParameterPredictor
 import config
 
 def set_seed(seed=42):
@@ -225,7 +225,7 @@ def train_model(
     Uses configuration from config.py if parameters not specified
 
     Args:
-        model_type: 'LSTM' or 'BiLSTM' (default: from config)
+        model_type: 'LSTM', 'BiLSTM', or 'AttentionLSTM' (default: from config)
         hidden_dim: Hidden dimension size (default: from config)
         num_layers: Number of LSTM layers (default: from config)
         dropout: Dropout rate (default: from config)
@@ -310,8 +310,16 @@ def train_model(
             output_dim=output_dim,
             dropout=dropout
         )
+    elif model_type == 'AttentionLSTM':
+        model = AttentionLSTMParameterPredictor(
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            output_dim=output_dim,
+            dropout=dropout
+        )
     else:
-        raise ValueError(f"Unknown model type: {model_type}")
+        raise ValueError(f"Unknown model type: {model_type}. Available types: 'LSTM', 'BiLSTM', 'AttentionLSTM'")
 
     model = model.to(device)
 

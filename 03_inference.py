@@ -11,7 +11,7 @@ import argparse
 from pathlib import Path
 from datetime import datetime, timedelta
 import xarray as xr
-from lstm_model import LSTMParameterPredictor, BiLSTMParameterPredictor
+from lstm_model import LSTMParameterPredictor, BiLSTMParameterPredictor, AttentionLSTMParameterPredictor
 import config
 
 
@@ -42,11 +42,12 @@ def load_observation_data(
     df['datetime_local'] = pd.to_datetime(df['date'], format='mixed')
 
     # Convert to UTC
-    df['datetime_utc'] = df['datetime_local'] - pd.Timedelta(hours=abs(utc_offset_hours))
+    # UTC offset is negative for western hemisphere (e.g., UTC-5 means local = UTC - 5, so UTC = local + 5)
+    df['datetime_utc'] = df['datetime_local'] - pd.Timedelta(hours=utc_offset_hours)
 
     # Filter by start time
     start_dt_local = pd.to_datetime(start_time_local)
-    start_dt_utc = start_dt_local - pd.Timedelta(hours=abs(utc_offset_hours))
+    start_dt_utc = start_dt_local - pd.Timedelta(hours=utc_offset_hours)
 
     print(f"Start time (local): {start_dt_local}")
     print(f"Start time (UTC): {start_dt_utc}")
@@ -341,8 +342,16 @@ def load_model_and_data(model_dir, data_file=None):
             output_dim=output_dim,
             dropout=model_config['dropout']
         )
+    elif model_config['model_type'] == 'AttentionLSTM':
+        model = AttentionLSTMParameterPredictor(
+            input_dim=input_dim,
+            hidden_dim=model_config['hidden_dim'],
+            num_layers=model_config['num_layers'],
+            output_dim=output_dim,
+            dropout=model_config['dropout']
+        )
     else:
-        raise ValueError(f"Unknown model type: {model_config['model_type']}")
+        raise ValueError(f"Unknown model type: {model_config['model_type']}. Available types: 'LSTM', 'BiLSTM', 'AttentionLSTM'")
 
     # Load weights
     checkpoint = torch.load(model_dir / 'best_model.pth', map_location='cpu')
@@ -396,7 +405,7 @@ def main():
     parser.add_argument('--n_days', type=int, default=None,
                        help='Number of days to process (default: all available)')
     parser.add_argument('--model_dir', type=str,
-                       default='results/BiLSTM_20251109_213053',
+                       default='results/AttentionLSTM_20251110_112216_dim-1024_layer-2',
                        help='Directory containing trained model')
     parser.add_argument('--data_file', type=str, default=None,
                        help='Path to processed data pickle (default: from config)')
@@ -429,7 +438,7 @@ def main():
     if args.use_forcing:
         # Calculate start time in UTC for forcing
         start_dt_local = pd.to_datetime(args.start_time_local)
-        start_dt_utc = start_dt_local - pd.Timedelta(hours=5)
+        start_dt_utc = start_dt_local + pd.Timedelta(hours=5)  # Panama is UTC-5, so UTC = local + 5
         start_time_utc_str = start_dt_utc.strftime('%Y-%m-%d %H:%M:%S')
 
         forcing_data = load_forcing_data(

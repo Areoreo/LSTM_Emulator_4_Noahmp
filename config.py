@@ -74,7 +74,7 @@ ADD_MONTH_FEATURE = False  # Add month as one-hot encoding
 # DATA PREPROCESSING CONFIGURATION
 # =============================================================================
 
-MAX_SAMPLES = 200
+MAX_SAMPLES = 300
 PARAMETER_FILE = 'data/raw/param/noahmp_param_sets.txt'
 SIMULATION_DIR = 'data/raw/sim_results'
 OUTPUT_FILE = 'data/processed_data_extended.pkl'  # Different filename to keep original
@@ -84,8 +84,8 @@ OUTPUT_FILE = 'data/processed_data_extended.pkl'  # Different filename to keep o
 # =============================================================================
 
 MODEL_CONFIG = {
-    'model_type': 'BiLSTM',  # Try bidirectional LSTM with more variables
-    'hidden_dim': 256,  # Larger hidden dimension for more variables
+    'model_type': 'AttentionLSTM',  # Options: 'LSTM', 'BiLSTM', 'AttentionLSTM'
+    'hidden_dim': 1536,  # Larger hidden dimension for more variables
     'num_layers': 2,
     'dropout': 0.2,
 }
@@ -98,7 +98,7 @@ TRAINING_CONFIG = {
     'learning_rate': 0.001,
     'batch_size': 16,
     'num_epochs': 1000,
-    'patience': 200,
+    'patience': 100,
     'train_ratio': 0.8,
 }
 
@@ -125,10 +125,10 @@ PARAMETER_WEIGHTS = {
     'REFSMC_CL': 1,
     'MAXSMC_CL': 1.0,      # Well predicted (R²=0.76) - focus more
     'SATDK_CL': 1,
-    'WLTSMC_SCL': 0.1,     # Negative R² - minimal focus
-    'REFSMC_SCL': 0.1,
-    'MAXSMC_SCL': 0.1,
-    'SATDK_SCL': 0.1,      # Very poorly predicted - minimal focus
+    'WLTSMC_SCL': 0,     # Negative R² - minimal focus
+    'REFSMC_SCL': 0,
+    'MAXSMC_SCL': 0,
+    'SATDK_SCL': 0,      # Very poorly predicted - minimal focus
 }
 
 # Option 3: Focus only on specific parameters
