@@ -1,490 +1,731 @@
 """
-Inference script for parameter prediction from observation data
-Loads observation data (Panama CSV) and forcing data, then predicts parameters
+Practical inference script for FORWARD LSTM model
+Standardized input/output format for real-world usage
+
+Input:
+  1. Forcing data: NetCDF file with LWFORC, SWFORC, RAINRATE, T2MV
+  2. Parameters: Text file (same format as noahmp_param_sets.txt)
+
+Output:
+  - CSV file with predictions (SOIL_M, LH, HFX columns)
+  - Optional PNG plot
 """
 
+import torch
 import numpy as np
 import pandas as pd
-import torch
-import pickle
-import argparse
-from pathlib import Path
-from datetime import datetime, timedelta
 import xarray as xr
-from lstm_model import LSTMParameterPredictor, BiLSTMParameterPredictor, AttentionLSTMParameterPredictor
-import config
+import pickle
+import json
+import matplotlib.pyplot as plt
+from pathlib import Path
+import argparse
+
+from lstm_model_forward import LSTMForwardPredictor, BiLSTMForwardPredictor, AttentionLSTMForwardPredictor
+import config_forward as config
 
 
-def load_observation_data(
-    obs_file='data/obs/Panama_BCI_v5.1_fluxtowerdata.csv',
-    start_time_local='2015-07-30 12:30:00',
-    n_days=None,
-    utc_offset_hours=-5
-):
+def load_model(model_dir, device='cpu'):
     """
-    Load observation data from Panama CSV
+    Load trained model from directory
 
     Args:
-        obs_file: Path to observation CSV file
-        start_time_local: Start time in local time (Panama time)
-        n_days: Number of days to load (if None, loads until end of file)
-        utc_offset_hours: UTC offset for local time (Panama is UTC-5)
+        model_dir: Directory containing model files
+        device: Device to load model on
 
     Returns:
-        DataFrame with observation data at 30-min resolution
+        model, data_dict, config_dict
     """
-    print(f"\nLoading observation data from {obs_file}...")
-
-    # Read CSV
-    df = pd.read_csv(obs_file)
-
-    # Parse dates - handle both "M/D/YY H:MM" and other formats
-    df['datetime_local'] = pd.to_datetime(df['date'], format='mixed')
-
-    # Convert to UTC
-    # UTC offset is negative for western hemisphere (e.g., UTC-5 means local = UTC - 5, so UTC = local + 5)
-    df['datetime_utc'] = df['datetime_local'] - pd.Timedelta(hours=utc_offset_hours)
-
-    # Filter by start time
-    start_dt_local = pd.to_datetime(start_time_local)
-    start_dt_utc = start_dt_local - pd.Timedelta(hours=utc_offset_hours)
-
-    print(f"Start time (local): {start_dt_local}")
-    print(f"Start time (UTC): {start_dt_utc}")
-
-    # Filter data
-    df_filtered = df[df['datetime_utc'] >= start_dt_utc].copy()
-
-    if n_days is not None:
-        end_dt_utc = start_dt_utc + pd.Timedelta(days=n_days)
-        df_filtered = df_filtered[df_filtered['datetime_utc'] < end_dt_utc].copy()
-        print(f"End time (UTC): {end_dt_utc}")
-
-    # Select relevant columns
-    # Map observation variables to simulation variables:
-    # SWC -> SOIL_M (soil moisture)
-    # LE -> LH (latent heat)
-    # H -> HFX (sensible heat)
-
-    # Rename columns to match simulation names
-    obs_data = pd.DataFrame({
-        'time': df_filtered['datetime_utc'],
-        'SOIL_M': df_filtered['SWC'],  # Soil moisture
-        'LH': df_filtered['LE'],        # Latent heat
-        'HFX': df_filtered['H'],        # Sensible heat
-    })
-
-    print(f"Loaded {len(obs_data)} timesteps ({len(obs_data)/48:.1f} days)")
-    print(f"Time range: {obs_data['time'].min()} to {obs_data['time'].max()}")
-
-    # Check for missing values
-    missing_counts = obs_data[['SOIL_M', 'LH', 'HFX']].isnull().sum()
-    if missing_counts.any():
-        print("\nWarning: Missing values detected:")
-        print(missing_counts)
-        print("Filling missing values with forward fill...")
-        obs_data[['SOIL_M', 'LH', 'HFX']] = obs_data[['SOIL_M', 'LH', 'HFX']].fillna(method='ffill')
-        obs_data[['SOIL_M', 'LH', 'HFX']] = obs_data[['SOIL_M', 'LH', 'HFX']].fillna(method='bfill')
-
-    return obs_data
-
-
-def load_forcing_data(
-    sample_idx=1,
-    data_dir='data/raw/sim_results',
-    start_time_utc='2015-07-30 17:30:00',
-    n_timesteps=None
-):
-    """
-    Load forcing data from a sample NetCDF file
-    This provides the forcing variables that are not in the observation data
-
-    Args:
-        sample_idx: Sample index to use for forcing data
-        data_dir: Directory containing simulation results
-        start_time_utc: Start time in UTC
-        n_timesteps: Number of timesteps to load
-
-    Returns:
-        DataFrame with forcing data
-    """
-    print(f"\nLoading forcing data from sample {sample_idx}...")
-
-    sim_path = Path(data_dir) / f'sample_{sample_idx}' / 'output' / '201507301730.LDASOUT_DOMAIN1'
-
-    if not sim_path.exists():
-        print(f"Warning: Forcing file not found at {sim_path}")
-        return None
-
-    # Load with xarray
-    ds = xr.open_dataset(sim_path)
-
-    # Get time information
-    time_strings = [s.decode() if isinstance(s, bytes) else s for s in ds['Times'].values]
-    time_strings = [s.replace('_', ' ') for s in time_strings]
-    times = pd.to_datetime(time_strings)
-
-    # Filter by start time
-    start_dt = pd.to_datetime(start_time_utc)
-    time_mask = times >= start_dt
-
-    if n_timesteps is not None:
-        time_mask = time_mask & (times < start_dt + pd.Timedelta(minutes=30*n_timesteps))
-
-    times_filtered = times[time_mask]
-
-    # Extract forcing variables based on config
-    forcing_vars = {}
-
-    # Check if using extended config with forcing variables
-    for var_config in config.INPUT_VARIABLES:
-        var_name = var_config['name']
-
-        # Skip the output variables (we get these from observations)
-        if var_name in ['SOIL_M', 'LH', 'HFX']:
-            continue
-
-        if var_name not in ds:
-            print(f"Warning: Forcing variable '{var_name}' not found in NetCDF")
-            continue
-
-        var_data = ds[var_name]
-
-        # Handle multi-layer variables
-        if 'layer' in var_config:
-            layer_dim = None
-            for dim in ['soil_layers_stag', 'snow_layers']:
-                if dim in var_data.dims:
-                    layer_dim = dim
-                    break
-            if layer_dim:
-                var_data = var_data.isel({layer_dim: var_config['layer']})
-
-        # Squeeze spatial dimensions
-        for dim in ['south_north', 'west_east']:
-            if dim in var_data.dims:
-                var_data = var_data.isel({dim: 0})
-
-        forcing_vars[var_name] = var_data.values[time_mask]
-
-    ds.close()
-
-    # Create DataFrame
-    forcing_data = pd.DataFrame({'time': times_filtered})
-    for var_name, var_values in forcing_vars.items():
-        forcing_data[var_name] = var_values
-
-    print(f"Loaded {len(forcing_data)} timesteps of forcing data")
-    print(f"Forcing variables: {list(forcing_vars.keys())}")
-
-    return forcing_data
-
-
-def combine_obs_and_forcing(obs_data, forcing_data):
-    """
-    Combine observation and forcing data
-
-    Args:
-        obs_data: DataFrame with observation data (SOIL_M, LH, HFX)
-        forcing_data: DataFrame with forcing data (or None if not using forcing)
-
-    Returns:
-        DataFrame with combined data
-    """
-    if forcing_data is None:
-        print("\nNo forcing data, using only observations")
-        return obs_data
-
-    print("\nCombining observation and forcing data...")
-
-    # Merge on time
-    combined = pd.merge(obs_data, forcing_data, on='time', how='left')
-
-    # Fill any missing forcing values
-    for col in forcing_data.columns:
-        if col != 'time' and col in combined.columns:
-            if combined[col].isnull().any():
-                print(f"Warning: Missing values in {col}, filling with forward fill")
-                combined[col] = combined[col].fillna(method='ffill').fillna(method='bfill')
-
-    return combined
-
-
-def aggregate_to_daily(data, variables):
-    """
-    Aggregate 30-min data to daily resolution based on config
-
-    Args:
-        data: DataFrame with 30-min data
-        variables: List of variable configs from config.INPUT_VARIABLES
-
-    Returns:
-        DataFrame with daily aggregated data
-    """
-    print("\nAggregating to daily resolution...")
-
-    # Create date column
-    data['date'] = data['time'].dt.date
-
-    # Build aggregation dictionary
-    agg_dict = {}
-    for var_config in variables:
-        var_name = var_config['name']
-        if var_name in data.columns:
-            agg_dict[var_name] = var_config['aggregation']
-
-    # Aggregate
-    daily_df = data.groupby('date').agg(agg_dict).reset_index()
-
-    # Add temporal features if configured
-    if config.ADD_TIME_FEATURES:
-        daily_df['doy'] = pd.to_datetime(daily_df['date']).dt.dayofyear / 365.0
-
-    if config.ADD_MONTH_FEATURE:
-        months = pd.to_datetime(daily_df['date']).dt.month
-        for month in range(1, 13):
-            daily_df[f'month_{month}'] = (months == month).astype(float)
-
-    print(f"Aggregated to {len(daily_df)} days")
-
-    return daily_df
-
-
-def prepare_input_array(daily_df, variable_names, X_mean, X_std):
-    """
-    Prepare input array for model inference
-
-    Args:
-        daily_df: DataFrame with daily aggregated data
-        variable_names: List of variable names (from training)
-        X_mean: Mean values for normalization (from training)
-        X_std: Std values for normalization (from training)
-
-    Returns:
-        Normalized input array (1, n_variables, n_timesteps)
-    """
-    print("\nPreparing input array...")
-
-    n_timesteps = len(daily_df)
-    n_variables = len(variable_names)
-
-    # Create input array
-    X = np.zeros((1, n_variables, n_timesteps))
-
-    # Fill array
-    for j, var_name in enumerate(variable_names):
-        if var_name not in daily_df.columns:
-            print(f"Warning: Variable '{var_name}' not found in data, using zeros")
-            continue
-        X[0, j, :] = daily_df[var_name].values
-
-    print(f"Input shape: {X.shape} (samples, variables, timesteps)")
-
-    # Normalize using training statistics
-    print("Normalizing inputs...")
-    X_normalized = (X - X_mean) / (X_std + 1e-8)
-
-    return X_normalized
-
-
-def load_model_and_data(model_dir, data_file=None):
-    """
-    Load trained model and preprocessing data
-
-    Args:
-        model_dir: Directory containing best_model.pth
-        data_file: Path to processed data pickle (optional, for normalization stats)
-
-    Returns:
-        model, data_dict
-    """
-    print(f"\nLoading model from {model_dir}...")
-
     model_dir = Path(model_dir)
 
     # Load config
     with open(model_dir / 'config.json', 'r') as f:
-        import json
-        model_config = json.load(f)
+        config_dict = json.load(f)
 
-    print("Model configuration:")
-    for key, value in model_config.items():
-        print(f"  {key}: {value}")
-
-    # Load preprocessing data
-    if data_file is None:
-        data_file = config.OUTPUT_FILE
-
-    print(f"\nLoading preprocessing data from {data_file}...")
+    # Load data statistics (for normalization)
+    data_file = config.OUTPUT_FILE
     with open(data_file, 'rb') as f:
         data_dict = pickle.load(f)
 
-    print(f"Variable names: {data_dict['variable_names']}")
-    print(f"Parameter names: {data_dict['param_names']}")
-
     # Create model
-    input_dim = data_dict['n_variables']
-    output_dim = len(data_dict['param_names'])
+    model_type = config_dict['model_type']
+    model_config = config_dict['model_config']
 
-    if model_config['model_type'] == 'LSTM':
-        model = LSTMParameterPredictor(
-            input_dim=input_dim,
-            hidden_dim=model_config['hidden_dim'],
-            num_layers=model_config['num_layers'],
-            output_dim=output_dim,
-            dropout=model_config['dropout']
-        )
-    elif model_config['model_type'] == 'BiLSTM':
-        model = BiLSTMParameterPredictor(
-            input_dim=input_dim,
-            hidden_dim=model_config['hidden_dim'],
-            num_layers=model_config['num_layers'],
-            output_dim=output_dim,
-            dropout=model_config['dropout']
-        )
-    elif model_config['model_type'] == 'AttentionLSTM':
-        model = AttentionLSTMParameterPredictor(
-            input_dim=input_dim,
-            hidden_dim=model_config['hidden_dim'],
-            num_layers=model_config['num_layers'],
-            output_dim=output_dim,
-            dropout=model_config['dropout']
-        )
+    model_kwargs = {
+        'n_params': config_dict['n_params'],
+        'n_forcing_vars': config_dict['n_forcing_vars'],
+        'n_target_vars': config_dict['n_target_vars'],
+        'hidden_dim': model_config['hidden_dim'],
+        'num_layers': model_config['num_layers'],
+        'param_embedding_dim': model_config['param_embedding_dim'],
+        'dropout': model_config['dropout']
+    }
+
+    if model_type == 'LSTM':
+        model = LSTMForwardPredictor(**model_kwargs)
+    elif model_type == 'BiLSTM':
+        model = BiLSTMForwardPredictor(**model_kwargs)
+    elif model_type == 'AttentionLSTM':
+        model = AttentionLSTMForwardPredictor(**model_kwargs)
     else:
-        raise ValueError(f"Unknown model type: {model_config['model_type']}. Available types: 'LSTM', 'BiLSTM', 'AttentionLSTM'")
+        raise ValueError(f"Unknown model type: {model_type}")
 
     # Load weights
-    checkpoint = torch.load(model_dir / 'best_model.pth', map_location='cpu')
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model.load_state_dict(torch.load(model_dir / 'best_model.pth', map_location=device))
+    model = model.to(device)
     model.eval()
 
-    print("Model loaded successfully")
-
-    return model, data_dict
+    return model, data_dict, config_dict
 
 
-def predict_parameters(model, X_normalized, data_dict):
+def load_forcing_from_netcdf(forcing_file, forcing_var_names):
     """
-    Predict parameters using trained model
+    Load forcing data from NetCDF file
+
+    Args:
+        forcing_file: Path to NetCDF file
+        forcing_var_names: List of forcing variable names to extract
+
+    Returns:
+        forcing_df: DataFrame with daily aggregated forcing data
+    """
+    print(f"\nLoading forcing data from: {forcing_file}")
+
+    # Load NetCDF
+    ds = xr.open_dataset(forcing_file)
+
+    # Extract time
+    times = pd.to_datetime(ds['time'].values)
+
+    # Extract forcing variables
+    forcing_data = {'time': times}
+
+    for var_name in forcing_var_names:
+        if var_name == 'doy':
+            continue  # Will be added later
+
+        if var_name not in ds:
+            raise ValueError(f"Variable '{var_name}' not found in forcing file")
+
+        forcing_data[var_name] = ds[var_name].values
+
+    ds.close()
+
+    # Create DataFrame
+    forcing_df = pd.DataFrame(forcing_data)
+
+    # Aggregate to daily based on configuration
+    forcing_df['date'] = forcing_df['time'].dt.date
+    agg_dict = {}
+
+    for var_config in config.FORCING_VARIABLES:
+        var_name = var_config['name']
+        if var_name in forcing_df.columns:
+            agg_dict[var_name] = var_config['aggregation']
+
+    forcing_daily = forcing_df.groupby('date').agg(agg_dict).reset_index()
+
+    # Add temporal features
+    if config.ADD_TIME_FEATURES:
+        forcing_daily['doy'] = pd.to_datetime(forcing_daily['date']).dt.dayofyear / 365.0
+
+    if config.ADD_MONTH_FEATURE:
+        months = pd.to_datetime(forcing_daily['date']).dt.month
+        for month in range(1, 13):
+            forcing_daily[f'month_{month}'] = (months == month).astype(float)
+
+    print(f"  ✓ Loaded forcing data: {forcing_daily.shape[0]} days")
+    print(f"  Variables: {list(agg_dict.keys())}")
+
+    return forcing_daily
+
+
+def load_parameters_from_txt(param_file, data_dict):
+    """
+    Load parameters from text file
+
+    Args:
+        param_file: Path to parameter file (same format as noahmp_param_sets.txt)
+        data_dict: Dictionary with parameter names and statistics
+
+    Returns:
+        params_df: DataFrame with parameters
+    """
+    print(f"\nLoading parameters from: {param_file}")
+
+    # Read parameter file
+    params_df = pd.read_csv(param_file, sep=r'\s+')
+
+    print(f"  ✓ Loaded {len(params_df)} parameter set(s)")
+
+    # Check if all required parameters are present
+    expected_params = data_dict['param_names']
+    missing_params = set(expected_params) - set(params_df.columns)
+    if missing_params:
+        raise ValueError(f"Missing parameters in file: {missing_params}")
+
+    # Reorder columns to match expected order
+    params_df = params_df[expected_params]
+
+    print(f"  Parameters: {list(params_df.columns)}")
+
+    return params_df
+
+
+def predict(model, params, forcing, data_dict, device='cpu'):
+    """
+    Predict time series from parameters and forcing
 
     Args:
         model: Trained model
-        X_normalized: Normalized input array (1, n_variables, n_timesteps)
+        params: Parameters array (n_params,) or (n_samples, n_params)
+        forcing: Forcing array (n_timesteps, n_forcing_vars) or (n_samples, n_timesteps, n_forcing_vars)
         data_dict: Dictionary with normalization statistics
+        device: Device to run prediction on
 
     Returns:
-        Predicted parameters (denormalized)
+        Predicted time series (denormalized)
     """
-    print("\nRunning inference...")
+    # Handle single sample case
+    if params.ndim == 1:
+        params = params.reshape(1, -1)
+    if forcing.ndim == 2:
+        forcing = forcing.reshape(1, forcing.shape[0], forcing.shape[1])
 
-    # Transpose to (1, n_timesteps, n_variables) for LSTM
-    X_transposed = np.transpose(X_normalized, (0, 2, 1))
-    X_tensor = torch.FloatTensor(X_transposed)
+    # Normalize inputs
+    params_normalized = (params - data_dict['X_params_mean']) / (data_dict['X_params_std'] + 1e-8)
+    forcing_normalized = (forcing - data_dict['X_forcing_mean']) / (data_dict['X_forcing_std'] + 1e-8)
+
+    # Convert to tensors
+    params_tensor = torch.FloatTensor(params_normalized).to(device)
+    forcing_tensor = torch.FloatTensor(forcing_normalized).to(device)
 
     # Predict
     with torch.no_grad():
-        y_pred_normalized = model(X_tensor)
-        y_pred_normalized = y_pred_normalized.cpu().numpy()
+        predictions_normalized = model(params_tensor, forcing_tensor)
+        predictions_normalized = predictions_normalized.cpu().numpy()
 
     # Denormalize
-    y_mean = data_dict['y_mean']
-    y_std = data_dict['y_std']
-    y_pred = y_pred_normalized * (y_std + 1e-8) + y_mean
+    predictions = predictions_normalized * data_dict['y_std'] + data_dict['y_mean']
 
-    return y_pred[0]  # Return first (and only) sample
+    return predictions
+
+
+def load_observations_from_csv(obs_file, dates, target_var_names):
+    """
+    Load observation data from CSV file and align with prediction dates
+
+    Args:
+        obs_file: Path to observation CSV file
+        dates: Array of prediction dates
+        target_var_names: List of target variable names
+
+    Returns:
+        obs_array: Array of observations (n_timesteps, n_target_vars)
+        valid_mask: Boolean mask indicating which timesteps have valid observations
+    """
+    print(f"\nLoading observations from: {obs_file}")
+
+    # Read observation file
+    obs_df = pd.read_csv(obs_file)
+
+    # Convert date column to datetime
+    obs_df['date'] = pd.to_datetime(obs_df['date']).dt.date
+
+    # Create prediction dates dataframe
+    pred_dates_df = pd.DataFrame({'date': dates})
+
+    # Merge observations with prediction dates
+    merged = pred_dates_df.merge(obs_df, on='date', how='left')
+
+    # Extract observation arrays
+    obs_array = merged[target_var_names].values  # (n_timesteps, n_target_vars)
+
+    # Create valid mask (True where we have observations for all variables)
+    valid_mask = ~np.isnan(obs_array).any(axis=1)
+
+    n_valid = valid_mask.sum()
+    n_total = len(dates)
+
+    print(f"  ✓ Loaded observations: {n_valid}/{n_total} days with valid data")
+    print(f"  Variables: {target_var_names}")
+
+    return obs_array, valid_mask
+
+
+def compute_metrics(obs, pred, target_var_names, valid_mask=None):
+    """
+    Compute metrics comparing observations and predictions
+    Uses the same approach as 02_train_forward.py
+
+    Args:
+        obs: Observations array (n_timesteps, n_target_vars)
+        pred: Predictions array (n_timesteps, n_target_vars)
+        target_var_names: List of target variable names
+        valid_mask: Boolean mask for valid observations (optional)
+
+    Returns:
+        Dictionary of metrics per variable
+    """
+    if valid_mask is not None:
+        obs = obs[valid_mask]
+        pred = pred[valid_mask]
+
+    n_target_vars = obs.shape[1]
+    metrics = {}
+
+    for i, var_name in enumerate(target_var_names):
+        obs_var = obs[:, i]
+        pred_var = pred[:, i]
+
+        # Remove any remaining NaN values
+        valid = ~(np.isnan(obs_var) | np.isnan(pred_var))
+        obs_var = obs_var[valid]
+        pred_var = pred_var[valid]
+
+        if len(obs_var) == 0:
+            metrics[var_name] = {
+                'R2': np.nan,
+                'RMSE': np.nan,
+                'PBIAS': np.nan,
+                'n_valid': 0
+            }
+            continue
+
+        # Compute R² (same as training script)
+        ss_res = np.sum((obs_var - pred_var) ** 2)
+        ss_tot = np.sum((obs_var - obs_var.mean()) ** 2)
+        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
+
+        # Compute RMSE (same as training script)
+        rmse = np.sqrt(np.mean((obs_var - pred_var) ** 2))
+
+        # Compute PBIAS (Percent Bias)
+        # PBIAS = 100 * sum(predicted - observed) / sum(observed)
+        pbias = 100 * np.sum(pred_var - obs_var) / np.sum(obs_var) if np.sum(obs_var) != 0 else np.nan
+
+        metrics[var_name] = {
+            'R2': float(r2),
+            'RMSE': float(rmse),
+            'PBIAS': float(pbias),
+            'n_valid': int(len(obs_var))
+        }
+
+    return metrics
+
+
+def save_predictions_csv(predictions, dates, target_var_names, output_file):
+    """
+    Save predictions to CSV file
+
+    Args:
+        predictions: Predictions array (n_samples, n_timesteps, n_target_vars)
+        dates: List of dates
+        target_var_names: List of target variable names
+        output_file: Output CSV file path
+    """
+    n_samples = predictions.shape[0]
+
+    if n_samples == 1:
+        # Single sample: simple format
+        df_data = {'date': dates}
+        for i, var_name in enumerate(target_var_names):
+            df_data[var_name] = predictions[0, :, i]
+
+        df = pd.DataFrame(df_data)
+        df.to_csv(output_file, index=False)
+        print(f"  ✓ Saved predictions to: {output_file}")
+
+    else:
+        # Multiple samples: save each sample separately
+        output_path = Path(output_file)
+        output_dir = output_path.parent
+        output_stem = output_path.stem
+
+        for sample_idx in range(n_samples):
+            sample_file = output_dir / f"{output_stem}_sample_{sample_idx+1}.csv"
+
+            df_data = {'date': dates}
+            for i, var_name in enumerate(target_var_names):
+                df_data[var_name] = predictions[sample_idx, :, i]
+
+            df = pd.DataFrame(df_data)
+            df.to_csv(sample_file, index=False)
+
+        print(f"  ✓ Saved {n_samples} prediction files to: {output_dir}")
+
+
+def plot_predictions(predictions, dates, target_var_names, observations=None,
+                     valid_mask=None, param_set_idx=1, save_path=None):
+    """
+    Plot predicted time series with optional observations overlay
+
+    Args:
+        predictions: Predictions array (n_timesteps, n_target_vars) or (1, n_timesteps, n_target_vars)
+        dates: List of dates
+        target_var_names: List of target variable names
+        observations: Observations array (n_timesteps, n_target_vars), optional
+        valid_mask: Boolean mask for valid observations, optional
+        param_set_idx: Parameter set index (for title)
+        save_path: Path to save plot
+    """
+    # Handle batch dimension
+    if predictions.ndim == 3:
+        predictions = predictions[0]
+
+    n_target_vars = len(target_var_names)
+
+    fig, axes = plt.subplots(n_target_vars, 1, figsize=(12, 3 * n_target_vars))
+
+    if n_target_vars == 1:
+        axes = [axes]
+
+    for i, var_name in enumerate(target_var_names):
+        ax = axes[i]
+
+        # Plot predictions
+        ax.plot(dates, predictions[:, i], linewidth=2, alpha=0.8, color='blue',
+                label='Predicted', zorder=2)
+
+        # Plot observations if available
+        if observations is not None:
+            obs_to_plot = observations[:, i].copy()
+            if valid_mask is not None:
+                # Set invalid observations to NaN so they don't plot
+                obs_to_plot[~valid_mask] = np.nan
+            ax.plot(dates, obs_to_plot, linewidth=2, alpha=0.7, color='red',
+                    label='Observed', linestyle='--', zorder=3)
+
+        ax.set_xlabel('Date', fontsize=11)
+        ax.set_ylabel(var_name, fontsize=11)
+
+        if observations is not None:
+            ax.set_title(f'{var_name} Comparison (Parameter Set {param_set_idx})', fontsize=12)
+            ax.legend(fontsize=10, loc='best')
+        else:
+            ax.set_title(f'Predicted {var_name} (Parameter Set {param_set_idx})', fontsize=12)
+
+        ax.grid(True, alpha=0.3)
+
+        # Rotate date labels
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    title = 'LSTM Forward Model: Predictions vs Observations' if observations is not None else 'LSTM Forward Model Predictions'
+    plt.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"  ✓ Saved plot to: {save_path}")
+    else:
+        plt.show()
+
+    plt.close()
+
+
+def plot_scatter(predictions, observations, target_var_names, metrics,
+                 valid_mask=None, param_set_idx=1, save_path=None):
+    """
+    Plot scatter plots of predictions vs observations
+
+    Args:
+        predictions: Predictions array (n_timesteps, n_target_vars) or (1, n_timesteps, n_target_vars)
+        observations: Observations array (n_timesteps, n_target_vars)
+        target_var_names: List of target variable names
+        metrics: Dictionary of metrics per variable
+        valid_mask: Boolean mask for valid observations, optional
+        param_set_idx: Parameter set index (for title)
+        save_path: Path to save plot
+    """
+    # Handle batch dimension
+    if predictions.ndim == 3:
+        predictions = predictions[0]
+
+    n_target_vars = len(target_var_names)
+
+    # Calculate subplot layout
+    ncols = min(3, n_target_vars)
+    nrows = (n_target_vars + ncols - 1) // ncols
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
+
+    if n_target_vars == 1:
+        axes = np.array([axes])
+    axes = axes.flatten() if n_target_vars > 1 else axes
+
+    for i, var_name in enumerate(target_var_names):
+        ax = axes[i]
+
+        # Get observations and predictions for this variable
+        obs_var = observations[:, i].copy()
+        pred_var = predictions[:, i].copy()
+
+        # Apply valid mask if provided
+        if valid_mask is not None:
+            obs_var = obs_var[valid_mask]
+            pred_var = pred_var[valid_mask]
+
+        # Remove NaN values
+        valid = ~(np.isnan(obs_var) | np.isnan(pred_var))
+        obs_var = obs_var[valid]
+        pred_var = pred_var[valid]
+
+        if len(obs_var) > 0:
+            # Scatter plot
+            ax.scatter(obs_var, pred_var, alpha=0.5, s=30, edgecolors='black', linewidth=0.5)
+
+            # 1:1 line
+            min_val = min(obs_var.min(), pred_var.min())
+            max_val = max(obs_var.max(), pred_var.max())
+            ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='1:1 Line')
+
+            # Get metrics for this variable
+            var_metrics = metrics.get(var_name, {})
+            r2 = var_metrics.get('R2', np.nan)
+            rmse = var_metrics.get('RMSE', np.nan)
+            pbias = var_metrics.get('PBIAS', np.nan)
+
+            # Add metrics text box
+            textstr = f'R² = {r2:.3f}\nRMSE = {rmse:.3f}\nPBIAS = {pbias:.2f}%'
+            props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+            ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=10,
+                    verticalalignment='top', bbox=props)
+
+        ax.set_xlabel(f'Observed {var_name}', fontsize=11)
+        ax.set_ylabel(f'Predicted {var_name}', fontsize=11)
+        ax.set_title(f'{var_name} (Parameter Set {param_set_idx})', fontsize=12)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=9, loc='lower right')
+
+        # Equal aspect ratio
+        ax.set_aspect('equal', adjustable='box')
+
+    # Hide unused subplots
+    for j in range(i + 1, len(axes)):
+        axes[j].axis('off')
+
+    plt.suptitle('Predictions vs Observations', fontsize=14, fontweight='bold')
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"  ✓ Saved scatter plot to: {save_path}")
+    else:
+        plt.show()
+
+    plt.close()
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Infer parameters from observation data')
-    parser.add_argument('--obs_file', type=str,
-                       default='data/obs/Panama_BCI_v5.1_fluxtowerdata.csv',
-                       help='Path to observation CSV file')
-    parser.add_argument('--start_time_local', type=str,
-                       default='2015-07-30 12:30:00',
-                       help='Start time in local time (Panama time)')
-    parser.add_argument('--n_days', type=int, default=None,
-                       help='Number of days to process (default: all available)')
-    parser.add_argument('--model_dir', type=str,
-                       default='results/AttentionLSTM_20251110_112216_dim-1024_layer-2',
+    parser = argparse.ArgumentParser(
+        description='Practical inference for LSTM forward model',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Single parameter set (no observations)
+  python 03_inference.py \\
+    --model_dir results_forward/AttentionLSTM_20251113_130927_dim-256_layer-2 \\
+    --forcing data/raw/forcing/forcing_sample_1.nc \\
+    --params data/raw/param/test_params.txt \\
+    --output predictions.csv \\
+    --plot
+
+  # Single parameter set with observations comparison
+  python 03_inference.py \\
+    --model_dir results_forward/AttentionLSTM_20251113_130927_dim-256_layer-2 \\
+    --forcing data/raw/forcing/forcing_sample_1.nc \\
+    --params data/raw/param/test_params.txt \\
+    --obs data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv \\
+    --output predictions.csv \\
+    --plot
+
+  # Multiple parameter sets with observations
+  python 03_inference.py \\
+    --model_dir results_forward/AttentionLSTM_20251113_130927_dim-256_layer-2 \\
+    --forcing data/raw/forcing/forcing_sample_1.nc \\
+    --params data/raw/param/noahmp_param_sets.txt \\
+    --obs data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv \\
+    --output predictions.csv \\
+    --max_samples 5 \\
+    --plot
+        """
+    )
+    parser.add_argument('--model_dir', type=str, required=True,
                        help='Directory containing trained model')
-    parser.add_argument('--data_file', type=str, default=None,
-                       help='Path to processed data pickle (default: from config)')
-    parser.add_argument('--forcing_sample', type=int, default=1,
-                       help='Sample index to use for forcing data')
-    parser.add_argument('--use_forcing', action='store_true',
-                       help='Use forcing data from sample (default: False)')
-    parser.add_argument('--output_file', type=str, default=None,
-                       help='Path to save predicted parameters (CSV)')
+    parser.add_argument('--forcing', type=str, required=True,
+                       help='NetCDF file with forcing data')
+    parser.add_argument('--params', type=str, required=True,
+                       help='Text file with parameters (same format as noahmp_param_sets.txt)')
+    parser.add_argument('--output', type=str, required=True,
+                       help='Output CSV file path')
+    parser.add_argument('--obs', type=str, default=None,
+                       help='CSV file with observations (same format as output, with date column)')
+    parser.add_argument('--plot', action='store_true',
+                       help='Generate PNG plot (time series and scatter if --obs provided)')
+    parser.add_argument('--max_samples', type=int, default=None,
+                       help='Maximum number of parameter sets to process (default: all)')
 
     args = parser.parse_args()
 
-    print("="*80)
-    print("PARAMETER INFERENCE FROM OBSERVATION DATA")
-    print("="*80)
+    # Device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
 
-    # Load model and preprocessing data
-    model, data_dict = load_model_and_data(args.model_dir, args.data_file)
+    # Load model
+    print(f"\n{'='*60}")
+    print("LOADING MODEL")
+    print('='*60)
+    model, data_dict, config_dict = load_model(args.model_dir, device)
+    print(f"  Model type: {config_dict['model_type']}")
+    print(f"  Parameters: {config_dict['total_parameters']:,}")
 
-    # Load observation data
-    obs_data = load_observation_data(
-        obs_file=args.obs_file,
-        start_time_local=args.start_time_local,
-        n_days=args.n_days,
-        utc_offset_hours=-5
-    )
+    # Load forcing data
+    print(f"\n{'='*60}")
+    print("LOADING FORCING DATA")
+    print('='*60)
+    forcing_var_names = data_dict['forcing_var_names']
+    forcing_df = load_forcing_from_netcdf(args.forcing, forcing_var_names)
 
-    # Load forcing data if requested
-    forcing_data = None
-    if args.use_forcing:
-        # Calculate start time in UTC for forcing
-        start_dt_local = pd.to_datetime(args.start_time_local)
-        start_dt_utc = start_dt_local + pd.Timedelta(hours=5)  # Panama is UTC-5, so UTC = local + 5
-        start_time_utc_str = start_dt_utc.strftime('%Y-%m-%d %H:%M:%S')
+    # Extract forcing array
+    forcing_array = forcing_df[forcing_var_names].values  # (n_timesteps, n_forcing_vars)
+    dates = forcing_df['date'].values
 
-        forcing_data = load_forcing_data(
-            sample_idx=args.forcing_sample,
-            start_time_utc=start_time_utc_str,
-            n_timesteps=len(obs_data)
-        )
+    print(f"  Forcing shape: {forcing_array.shape}")
 
-    # Combine data
-    combined_data = combine_obs_and_forcing(obs_data, forcing_data)
+    # Load parameters
+    print(f"\n{'='*60}")
+    print("LOADING PARAMETERS")
+    print('='*60)
+    params_df = load_parameters_from_txt(args.params, data_dict)
 
-    # Aggregate to daily
-    daily_data = aggregate_to_daily(combined_data, config.INPUT_VARIABLES)
+    # Limit number of samples if specified
+    if args.max_samples is not None:
+        n_samples = min(args.max_samples, len(params_df))
+        params_df = params_df.head(n_samples)
+        print(f"  Processing first {n_samples} parameter set(s)")
 
-    # Prepare input array
-    X_normalized = prepare_input_array(
-        daily_data,
-        data_dict['variable_names'],
-        data_dict['X_mean'],
-        data_dict['X_std']
-    )
+    params_array = params_df.values  # (n_samples, n_params)
 
-    # Predict parameters
-    params_pred = predict_parameters(model, X_normalized, data_dict)
+    print(f"  Parameters shape: {params_array.shape}")
 
-    # Display results
-    print("\n" + "="*80)
-    print("PREDICTED PARAMETERS")
-    print("="*80)
+    # Predict
+    print(f"\n{'='*60}")
+    print("RUNNING PREDICTIONS")
+    print('='*60)
 
-    param_names = data_dict['param_names']
-    for i, (name, value) in enumerate(zip(param_names, params_pred)):
-        print(f"{name:20s}: {value:12.6f}")
+    # Replicate forcing for all parameter sets
+    n_samples = params_array.shape[0]
+    forcing_replicated = np.tile(forcing_array[np.newaxis, :, :],
+                                 (n_samples, 1, 1))  # (n_samples, n_timesteps, n_forcing_vars)
 
-    # Save results if requested
-    if args.output_file is not None:
-        output_df = pd.DataFrame({
-            'parameter': param_names,
-            'value': params_pred
-        })
-        output_df.to_csv(args.output_file, index=False)
-        print(f"\nResults saved to: {args.output_file}")
+    print(f"  Input shapes:")
+    print(f"    Parameters: {params_array.shape}")
+    print(f"    Forcing: {forcing_replicated.shape}")
 
-    print("="*80)
-    print("Inference complete!")
-    print("="*80)
+    predictions = predict(model, params_array, forcing_replicated, data_dict, device)
+
+    print(f"  Output shape: {predictions.shape}")
+
+    target_var_names = data_dict['target_var_names']
+
+    # Save predictions
+    print(f"\n{'='*60}")
+    print("SAVING RESULTS")
+    print('='*60)
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    save_predictions_csv(predictions, dates, target_var_names, args.output)
+
+    # Load and compare with observations if provided
+    observations = None
+    valid_mask = None
+    metrics_all = []
+
+    if args.obs:
+        print(f"\n{'='*60}")
+        print("LOADING OBSERVATIONS AND COMPUTING METRICS")
+        print('='*60)
+
+        observations, valid_mask = load_observations_from_csv(args.obs, dates, target_var_names)
+
+        # Compute metrics for each sample
+        for sample_idx in range(n_samples):
+            pred_sample = predictions[sample_idx]  # (n_timesteps, n_target_vars)
+            metrics = compute_metrics(observations, pred_sample, target_var_names, valid_mask)
+            metrics_all.append(metrics)
+
+            print(f"\nMetrics for Parameter Set {sample_idx + 1}:")
+            for var_name, var_metrics in metrics.items():
+                print(f"  {var_name}:")
+                print(f"    R²    = {var_metrics['R2']:.4f}")
+                print(f"    RMSE  = {var_metrics['RMSE']:.4f}")
+                print(f"    PBIAS = {var_metrics['PBIAS']:.2f}%")
+                print(f"    N     = {var_metrics['n_valid']}")
+
+        # Save metrics to JSON file(s)
+        if n_samples == 1:
+            metrics_file = output_path.parent / f"{output_path.stem}_metrics.json"
+            with open(metrics_file, 'w') as f:
+                json.dump(metrics_all[0], f, indent=2)
+            print(f"\n  ✓ Saved metrics to: {metrics_file}")
+        else:
+            for sample_idx in range(n_samples):
+                metrics_file = output_path.parent / f"{output_path.stem}_sample_{sample_idx+1}_metrics.json"
+                with open(metrics_file, 'w') as f:
+                    json.dump(metrics_all[sample_idx], f, indent=2)
+            print(f"\n  ✓ Saved {n_samples} metrics files to: {output_path.parent}")
+
+    # Generate plots if requested
+    if args.plot:
+        print(f"\n{'='*60}")
+        print("GENERATING PLOTS")
+        print('='*60)
+
+        if n_samples == 1:
+            # Time series plot
+            plot_path = output_path.with_suffix('.png')
+            plot_predictions(predictions, dates, target_var_names,
+                           observations=observations, valid_mask=valid_mask,
+                           param_set_idx=1, save_path=plot_path)
+
+            # Scatter plot if observations available
+            if observations is not None:
+                scatter_path = output_path.parent / f"{output_path.stem}_scatter.png"
+                plot_scatter(predictions, observations, target_var_names,
+                           metrics_all[0], valid_mask=valid_mask,
+                           param_set_idx=1, save_path=scatter_path)
+        else:
+            # Plot all samples
+            for i in range(n_samples):
+                # Time series plot
+                plot_path = output_path.parent / f"{output_path.stem}_sample_{i+1}.png"
+                plot_predictions(predictions[i:i+1], dates, target_var_names,
+                               observations=observations, valid_mask=valid_mask,
+                               param_set_idx=i+1, save_path=plot_path)
+
+                # Scatter plot if observations available
+                if observations is not None:
+                    scatter_path = output_path.parent / f"{output_path.stem}_sample_{i+1}_scatter.png"
+                    plot_scatter(predictions[i:i+1], observations, target_var_names,
+                               metrics_all[i], valid_mask=valid_mask,
+                               param_set_idx=i+1, save_path=scatter_path)
+
+    print(f"\n{'='*60}")
+    print("✓ INFERENCE COMPLETE")
+    print('='*60)
+    print(f"\nResults saved to: {output_path.parent}")
+    if args.obs:
+        print(f"  - Predictions CSV: {output_path.name}")
+        print(f"  - Metrics JSON: *_metrics.json")
+        if args.plot:
+            print(f"  - Time series plots: *.png")
+            print(f"  - Scatter plots: *_scatter.png")
+    else:
+        print(f"  - Predictions CSV: {output_path.name}")
+        if args.plot:
+            print(f"  - Time series plots: *.png")
 
 
 if __name__ == '__main__':

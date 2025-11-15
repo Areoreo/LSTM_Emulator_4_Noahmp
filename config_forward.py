@@ -1,23 +1,21 @@
 """
-Example configuration with extended variables
-This shows how to easily add more input variables
+Configuration for FORWARD LSTM model
+Predicts time series results from parameters and forcing data
 
-To use this config:
-1. Rename this file to config.py (backup the original first)
-2. Run data_preprocessing.py to preprocess with new variables
-3. Run train.py to train with new variables
+FORWARD Problem:
+- Input: Parameters (9 NoahMP params) + Forcing variables (time series)
+- Output: Target variables time series (SOIL_M, LH, HFX)
 """
 
 # =============================================================================
-# INPUT VARIABLES CONFIGURATION - EXTENDED VERSION
+# TARGET VARIABLES CONFIGURATION (What we want to predict)
 # =============================================================================
 
-INPUT_VARIABLES = [
-    # Original physical variables
+TARGET_VARIABLES = [
     {
         'name': 'SOIL_M',
         'aggregation': 'mean',
-        'layer': 0,  # First soil layer
+        'layer': 0,
         'description': 'Volumetric soil moisture (m3/m3) - Layer 1'
     },
     {
@@ -30,8 +28,13 @@ INPUT_VARIABLES = [
         'aggregation': 'mean',
         'description': 'Sensible heat flux (W/m2)'
     },
+]
 
-    # Additional forcing variables
+# =============================================================================
+# FORCING VARIABLES CONFIGURATION (Time series inputs)
+# =============================================================================
+
+FORCING_VARIABLES = [
     {
         'name': 'LWFORC',
         'aggregation': 'mean',
@@ -44,7 +47,7 @@ INPUT_VARIABLES = [
     },
     {
         'name': 'RAINRATE',
-        'aggregation': 'sum',  # Sum for precipitation (total daily)
+        'aggregation': 'sum',
         'description': 'Total daily precipitation (mm/day)'
     },
     {
@@ -52,18 +55,6 @@ INPUT_VARIABLES = [
         'aggregation': 'mean',
         'description': 'Temperature at 2m (K)'
     },
-
-    # Additional state variables (examples - check your NetCDF for available vars)
-    # {
-    #     'name': 'SNOW',
-    #     'aggregation': 'mean',
-    #     'description': 'Snow water equivalent (mm)'
-    # },
-    # {
-    #     'name': 'CANWAT',
-    #     'aggregation': 'mean',
-    #     'description': 'Canopy water (mm)'
-    # },
 ]
 
 # Add temporal features
@@ -74,20 +65,21 @@ ADD_MONTH_FEATURE = False  # Add month as one-hot encoding
 # DATA PREPROCESSING CONFIGURATION
 # =============================================================================
 
-MAX_SAMPLES = 200
+MAX_SAMPLES = 250
 PARAMETER_FILE = 'data/raw/param/noahmp_param_sets.txt'
 SIMULATION_DIR = 'data/raw/sim_results'
-OUTPUT_FILE = 'data/processed_data_extended.pkl'  # Different filename to keep original
+OUTPUT_FILE = 'data/processed_data_forward.pkl'
 
 # =============================================================================
 # MODEL CONFIGURATION
 # =============================================================================
 
 MODEL_CONFIG = {
-    'model_type': 'BiLSTM',  # Try bidirectional LSTM with more variables
-    'hidden_dim': 256,  # Larger hidden dimension for more variables
+    'model_type': 'AttentionLSTM',  # Options: 'LSTM', 'BiLSTM', 'AttentionLSTM'
+    'hidden_dim': 1536,
     'num_layers': 2,
     'dropout': 0.2,
+    'param_embedding_dim': 64,  # Dimension for parameter embedding
 }
 
 # =============================================================================
@@ -98,23 +90,55 @@ TRAINING_CONFIG = {
     'learning_rate': 0.001,
     'batch_size': 16,
     'num_epochs': 1000,
-    'patience': 200,
+    'patience': 120,
     'train_ratio': 0.8,
 }
+
+# =============================================================================
+# OUTPUT LOSS WEIGHTS CONFIGURATION
+# =============================================================================
+
+# Control how much each output variable contributes to the loss
+# Higher weight = model focuses more on predicting that variable accurately
+# Set to None to use uniform weights (all variables equally important)
+
+OUTPUT_WEIGHTS = {
+    'SOIL_M': 1.0,
+    'LH': 1.0,
+    'HFX': 1.0,
+}
+
+def get_output_weights(variable_names):
+    """
+    Get output weights based on variable names
+
+    Args:
+        variable_names: List of variable names
+
+    Returns:
+        numpy array of weights (one per variable)
+    """
+    import numpy as np
+
+    if OUTPUT_WEIGHTS is not None:
+        weights = np.array([OUTPUT_WEIGHTS.get(name, 1.0) for name in variable_names])
+        return weights
+
+    return np.ones(len(variable_names))
 
 # =============================================================================
 # RESULTS CONFIGURATION
 # =============================================================================
 
-RESULTS_DIR = 'results'
+RESULTS_DIR = 'results_forward'
 
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
-def get_variable_names():
-    """Get list of variable names"""
-    names = [var['name'] for var in INPUT_VARIABLES]
+def get_forcing_variable_names():
+    """Get list of forcing variable names"""
+    names = [var['name'] for var in FORCING_VARIABLES]
     if ADD_TIME_FEATURES:
         names.append('doy')
     if ADD_MONTH_FEATURE:
@@ -122,32 +146,46 @@ def get_variable_names():
             names.append(f'month_{i+1}')
     return names
 
-def get_num_variables():
-    """Get total number of input variables"""
-    num_vars = len(INPUT_VARIABLES)
+def get_target_variable_names():
+    """Get list of target variable names"""
+    return [var['name'] for var in TARGET_VARIABLES]
+
+def get_num_forcing_variables():
+    """Get total number of forcing variables"""
+    num_vars = len(FORCING_VARIABLES)
     if ADD_TIME_FEATURES:
         num_vars += 1
     if ADD_MONTH_FEATURE:
         num_vars += 12
     return num_vars
 
+def get_num_target_variables():
+    """Get total number of target variables"""
+    return len(TARGET_VARIABLES)
+
 def print_config():
     """Print current configuration"""
     print("="*80)
-    print("CONFIGURATION SUMMARY (EXTENDED)")
+    print("FORWARD MODEL CONFIGURATION")
     print("="*80)
-    print(f"\nInput Variables ({len(INPUT_VARIABLES)}):")
-    for i, var in enumerate(INPUT_VARIABLES, 1):
+
+    print(f"\nTarget Variables ({len(TARGET_VARIABLES)}) - What we predict:")
+    for i, var in enumerate(TARGET_VARIABLES, 1):
         layer_info = f" [Layer {var['layer']}]" if 'layer' in var else ""
         print(f"  {i}. {var['name']}{layer_info} - {var['aggregation']} - {var['description']}")
 
+    print(f"\nForcing Variables ({len(FORCING_VARIABLES)}) - Time series inputs:")
+    for i, var in enumerate(FORCING_VARIABLES, 1):
+        print(f"  {i}. {var['name']} - {var['aggregation']} - {var['description']}")
+
     if ADD_TIME_FEATURES:
-        print(f"  {len(INPUT_VARIABLES)+1}. doy - Day of year (normalized)")
+        print(f"  {len(FORCING_VARIABLES)+1}. doy - Day of year (normalized)")
 
     if ADD_MONTH_FEATURE:
-        print(f"  {len(INPUT_VARIABLES)+2}-{len(INPUT_VARIABLES)+13}. month_1 to month_12 - One-hot encoded month")
+        print(f"  {len(FORCING_VARIABLES)+2}-{len(FORCING_VARIABLES)+13}. month_1 to month_12 - One-hot encoded month")
 
-    print(f"\nTotal input features: {get_num_variables()}")
+    print(f"\nTotal forcing features: {get_num_forcing_variables()}")
+    print(f"Total target features: {get_num_target_variables()}")
 
     print(f"\nData Configuration:")
     print(f"  Max samples: {MAX_SAMPLES}")
@@ -162,6 +200,13 @@ def print_config():
     print(f"\nTraining Configuration:")
     for key, value in TRAINING_CONFIG.items():
         print(f"  {key}: {value}")
+
+    print(f"\nOutput Loss Weights:")
+    if OUTPUT_WEIGHTS is not None:
+        for var_name, weight in OUTPUT_WEIGHTS.items():
+            print(f"  {var_name}: {weight}")
+    else:
+        print(f"  Uniform weights (all variables equal)")
 
     print("="*80)
 
