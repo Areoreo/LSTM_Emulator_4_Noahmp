@@ -1,10 +1,11 @@
 """
-Data preprocessing script for FORWARD LSTM model
-Prepares data for predicting time series from parameters and forcing
+Data preprocessing script for COMPREHENSIVE FORWARD LSTM model
+Prepares data for predicting ALL energy/water cycle variables
 
-FORWARD Problem (9 NoahMP parameters):
-- Input: Parameters + Forcing time series (LWFORC, SWFORC, RAINRATE, T2MV, doy)
-- Output: Target time series (SOIL_M, LH, HFX)
+COMPREHENSIVE FORWARD Problem:
+- Input: Parameters (9) + Forcing time series (LWFORC, SWFORC, RAINRATE, T2MV, doy)
+- Output: All energy/water cycle variables (32+ variables)
+- Goal: Full conservation checking
 """
 
 import xarray as xr
@@ -13,11 +14,11 @@ import numpy as np
 from pathlib import Path
 import pickle
 from tqdm import tqdm
-import config_forward as config
+import config_forward_comprehensive as config
 
 def load_simulation_data(sample_idx, data_dir='data/raw/sim_results'):
     """
-    Load both forcing and target variables for a single sample
+    Load both forcing and ALL target variables for a single sample
 
     Args:
         sample_idx: Sample index (1-based)
@@ -62,6 +63,7 @@ def load_simulation_data(sample_idx, data_dir='data/raw/sim_results'):
     target_data = {'time': times}
     for var_config in config.TARGET_VARIABLES:
         var_name = var_config['name']
+        output_name = var_config.get('output_name', var_name)
 
         if var_name not in ds:
             print(f"Warning: Target variable '{var_name}' not found in sample {sample_idx}")
@@ -86,7 +88,7 @@ def load_simulation_data(sample_idx, data_dir='data/raw/sim_results'):
             if dim in var_data.dims:
                 var_data = var_data.isel({dim: 0})
 
-        target_data[var_name] = var_data.values
+        target_data[output_name] = var_data.values
 
     ds.close()
 
@@ -104,8 +106,11 @@ def load_simulation_data(sample_idx, data_dir='data/raw/sim_results'):
     forcing_daily = forcing_df.groupby('date').agg(forcing_agg_dict).reset_index()
 
     # Target aggregation
-    target_agg_dict = {var_config['name']: var_config['aggregation']
-                       for var_config in config.TARGET_VARIABLES}
+    target_agg_dict = {}
+    for var_config in config.TARGET_VARIABLES:
+        output_name = var_config.get('output_name', var_config['name'])
+        target_agg_dict[output_name] = var_config['aggregation']
+
     target_daily = target_df.groupby('date').agg(target_agg_dict).reset_index()
 
     # Add temporal features to forcing
@@ -131,12 +136,12 @@ def load_parameters(param_file='data/raw/param/noahmp_param_sets.txt'):
 
 def preprocess_all_data(max_samples=None, output_file=None):
     """
-    Process all samples for forward modeling
+    Process all samples for comprehensive forward modeling
 
     Creates:
     - X_forcing: (n_samples, n_timesteps, n_forcing_vars) - time series of forcing
     - X_params: (n_samples, n_params) - parameters for each sample
-    - y: (n_samples, n_timesteps, n_target_vars) - target time series to predict
+    - y: (n_samples, n_timesteps, n_target_vars) - ALL target time series
 
     Args:
         max_samples: Maximum number of samples to process
@@ -158,22 +163,34 @@ def preprocess_all_data(max_samples=None, output_file=None):
     params = load_parameters(config.PARAMETER_FILE)
 
     print(f"\nProcessing simulation results for {max_samples} samples...")
+    print(f"Extracting {config.get_num_target_variables()} target variables...")
 
     all_forcing = []
     all_targets = []
     valid_indices = []
+    failed_samples = []
 
     for idx in tqdm(range(1, max_samples + 1)):
         forcing_data, target_data = load_simulation_data(idx, data_dir=config.SIMULATION_DIR)
 
         if forcing_data is not None and target_data is not None:
+            # Check for NaN values
+            if forcing_data.isnull().any().any() or target_data.isnull().any().any():
+                print(f"Warning: Sample {idx} contains NaN values, skipping")
+                failed_samples.append(idx)
+                continue
+
             all_forcing.append(forcing_data)
             all_targets.append(target_data)
             valid_indices.append(idx - 1)  # 0-based index for params
         else:
-            print(f"Warning: Sample {idx} not found or missing variables")
+            failed_samples.append(idx)
 
     print(f"\nSuccessfully loaded {len(all_forcing)} samples")
+    if failed_samples:
+        print(f"Failed/skipped samples: {len(failed_samples)}")
+        if len(failed_samples) <= 10:
+            print(f"  Indices: {failed_samples}")
 
     if len(all_forcing) == 0:
         raise ValueError("No valid samples found!")
@@ -187,6 +204,7 @@ def preprocess_all_data(max_samples=None, output_file=None):
 
     forcing_var_names = config.get_forcing_variable_names()
     target_var_names = config.get_target_variable_names()
+    target_categories = config.get_target_variable_categories()
     param_names = params.columns.tolist()
 
     print(f"\nData dimensions:")
@@ -211,20 +229,37 @@ def preprocess_all_data(max_samples=None, output_file=None):
     # Create parameter array: (n_samples, n_params)
     X_params = params.iloc[valid_indices].values
 
+    # Check for infinite or NaN values
+    print("\nChecking data quality...")
+    if np.any(np.isnan(X_forcing)) or np.any(np.isinf(X_forcing)):
+        print("Warning: X_forcing contains NaN or Inf values")
+    if np.any(np.isnan(X_params)) or np.any(np.isinf(X_params)):
+        print("Warning: X_params contains NaN or Inf values")
+    if np.any(np.isnan(y)) or np.any(np.isinf(y)):
+        print("Warning: y contains NaN or Inf values")
+
     # Normalize forcing variables (per variable, across samples and time)
-    X_forcing_mean = X_forcing.mean(axis=(0, 1), keepdims=True)
-    X_forcing_std = X_forcing.std(axis=(0, 1), keepdims=True)
+    print("\nNormalizing data...")
+    X_forcing_mean = np.nanmean(X_forcing, axis=(0, 1), keepdims=True)
+    X_forcing_std = np.nanstd(X_forcing, axis=(0, 1), keepdims=True)
     X_forcing_normalized = (X_forcing - X_forcing_mean) / (X_forcing_std + 1e-8)
 
     # Normalize parameters (per parameter, across samples)
-    X_params_mean = X_params.mean(axis=0, keepdims=True)
-    X_params_std = X_params.std(axis=0, keepdims=True)
+    X_params_mean = np.nanmean(X_params, axis=0, keepdims=True)
+    X_params_std = np.nanstd(X_params, axis=0, keepdims=True)
     X_params_normalized = (X_params - X_params_mean) / (X_params_std + 1e-8)
 
     # Normalize targets (per variable, across samples and time)
-    y_mean = y.mean(axis=(0, 1), keepdims=True)
-    y_std = y.std(axis=(0, 1), keepdims=True)
+    y_mean = np.nanmean(y, axis=(0, 1), keepdims=True)
+    y_std = np.nanstd(y, axis=(0, 1), keepdims=True)
     y_normalized = (y - y_mean) / (y_std + 1e-8)
+
+    # Print normalization statistics
+    print("\nNormalization statistics:")
+    print(f"  Forcing - mean range: [{X_forcing_mean.min():.2e}, {X_forcing_mean.max():.2e}]")
+    print(f"  Forcing - std range: [{X_forcing_std.min():.2e}, {X_forcing_std.max():.2e}]")
+    print(f"  Targets - mean range: [{y_mean.min():.2e}, {y_mean.max():.2e}]")
+    print(f"  Targets - std range: [{y_std.min():.2e}, {y_std.max():.2e}]")
 
     # Save processed data
     data_dict = {
@@ -239,9 +274,11 @@ def preprocess_all_data(max_samples=None, output_file=None):
         'y_std': y_std,
         'forcing_var_names': forcing_var_names,
         'target_var_names': target_var_names,
+        'target_categories': target_categories,
         'param_names': param_names,
         'n_timesteps': n_timesteps,
         'valid_indices': valid_indices,
+        'failed_indices': failed_samples,
         'n_forcing_vars': n_forcing_vars,
         'n_target_vars': n_target_vars,
         'n_params': n_params
@@ -258,6 +295,12 @@ def preprocess_all_data(max_samples=None, output_file=None):
     print(f"Parameter input shape: {X_params_normalized.shape} (samples, n_params)")
     print(f"Target output shape: {y_normalized.shape} (samples, timesteps, target_vars)")
     print(f"Saved to: {output_file}")
+
+    # Print target variable breakdown
+    print(f"\nTarget variables by category:")
+    for category in ['energy_balance', 'energy_components', 'water_fluxes', 'water_storage', 'temperature']:
+        count = sum(1 for c in target_categories if c == category)
+        print(f"  {category}: {count} variables")
 
     return data_dict
 
