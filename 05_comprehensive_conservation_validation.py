@@ -354,90 +354,201 @@ def main():
         energy_stats = checker.check_full_energy_conservation(pred_dict, forcing_dict, verbose=True)
         water_stats = checker.check_full_water_conservation(pred_dict, forcing_dict, verbose=True)
 
-        checker.plot_comprehensive_conservation(energy_stats, water_stats, save_dir=output_dir)
+        # Use improved visualization
+        checker.plot_improved_conservation(energy_stats, water_stats, save_dir=output_dir)
+        print(f"\nDetailed conservation plots saved to:")
+        print(f"  - {output_dir / 'energy_conservation_improved.png'}")
+        print(f"  - {output_dir / 'water_conservation_improved.png'}")
 
-    # Save numerical results
+    # Save numerical results with improved format
     results_file = output_dir / 'comprehensive_conservation_results.json'
+
+    # Determine assessment levels
+    energy_assessment = 'EXCELLENT' if results['energy']['rmse'] < 10 else \
+                       'GOOD' if results['energy']['rmse'] < 30 else \
+                       'ACCEPTABLE' if results['energy']['rmse'] < 50 else 'POOR'
+
+    water_assessment = 'EXCELLENT' if results['water']['rmse'] < 0.1 else \
+                      'GOOD' if results['water']['rmse'] < 0.5 else \
+                      'ACCEPTABLE' if results['water']['rmse'] < 1.0 else 'POOR'
+
     save_results = {
+        'metadata': {
+            'model_dir': str(args.model_dir),
+            'model_type': config_dict['model_type'],
+            'n_target_vars': config_dict['n_target_vars'],
+            'n_samples_validated': results['n_samples'],
+            'test_indices': test_indices,
+        },
         'energy_conservation': {
-            'mean_residual': float(results['energy']['mean_residual']),
-            'std_residual': float(results['energy']['std_residual']),
-            'rmse': float(results['energy']['rmse']),
-            'relative_error_pct': float(results['energy']['relative_error_pct']),
+            'description': 'Energy balance: residual = input - output',
+            'equation': '(FSA - FIRA) - (HFX + LH + GRDFLX)',
+            'statistics': {
+                'mean_residual_Wm2': float(results['energy']['mean_residual']),
+                'std_residual_Wm2': float(results['energy']['std_residual']),
+                'rmse_Wm2': float(results['energy']['rmse']),
+                'relative_error_percent': float(results['energy']['relative_error_pct']),
+            },
+            'assessment': energy_assessment,
+            'thresholds': {
+                'EXCELLENT': '< 10 W/m²',
+                'GOOD': '< 30 W/m²',
+                'ACCEPTABLE': '< 50 W/m²',
+                'POOR': '>= 50 W/m²'
+            }
         },
         'water_conservation': {
-            'mean_residual': float(results['water']['mean_residual']),
-            'std_residual': float(results['water']['std_residual']),
-            'rmse': float(results['water']['rmse']),
-            'cumulative_precip': float(results['water']['cumulative_precip']),
-            'cumulative_et': float(results['water']['cumulative_et']),
-            'cumulative_runoff': float(results['water']['cumulative_runoff']),
+            'description': 'Water balance: residual = input - output - change',
+            'equation': 'Precipitation - (ET + Runoff + ΔStorage)',
+            'statistics': {
+                'mean_residual_mm_per_day': float(results['water']['mean_residual']),
+                'std_residual_mm_per_day': float(results['water']['std_residual']),
+                'rmse_mm_per_day': float(results['water']['rmse']),
+            },
+            'cumulative_totals_mm': {
+                'precipitation': float(results['water']['cumulative_precip']),
+                'evapotranspiration': float(results['water']['cumulative_et']),
+                'runoff': float(results['water']['cumulative_runoff']),
+                'total_output': float(results['water']['cumulative_et'] + results['water']['cumulative_runoff']),
+            },
+            'assessment': water_assessment,
+            'thresholds': {
+                'EXCELLENT': '< 0.1 mm/day',
+                'GOOD': '< 0.5 mm/day',
+                'ACCEPTABLE': '< 1.0 mm/day',
+                'POOR': '>= 1.0 mm/day'
+            }
         },
-        'n_samples': results['n_samples'],
-        'test_indices': test_indices,
-        'model_dir': str(args.model_dir),
-        'n_target_vars': config_dict['n_target_vars'],
     }
 
     with open(results_file, 'w') as f:
         json.dump(save_results, f, indent=2)
     print(f"\nResults saved to: {results_file}")
 
-    # Generate detailed report
+    # Generate detailed report with improved format
     report_file = output_dir / 'comprehensive_conservation_report.txt'
     with open(report_file, 'w') as f:
         f.write("="*80 + "\n")
-        f.write("COMPREHENSIVE CONSERVATION VALIDATION REPORT\n")
+        f.write("    COMPREHENSIVE CONSERVATION VALIDATION REPORT\n")
         f.write("="*80 + "\n\n")
 
-        f.write(f"Model: {args.model_dir}\n")
+        f.write("MODEL INFORMATION\n")
+        f.write("-"*80 + "\n")
+        f.write(f"Model directory:  {args.model_dir}\n")
+        f.write(f"Model type:       {config_dict['model_type']}\n")
         f.write(f"Target variables: {config_dict['n_target_vars']}\n")
-        f.write(f"Test samples: {results['n_samples']}\n\n")
+        f.write(f"Test samples:     {results['n_samples']}\n")
+        f.write(f"Sample indices:   {test_indices[0]} - {test_indices[-1]}\n\n")
 
+        f.write("="*80 + "\n")
         f.write("ENERGY CONSERVATION\n")
-        f.write("-"*80 + "\n")
-        f.write(f"Mean residual: {results['energy']['mean_residual']:.2f} W/m²\n")
-        f.write(f"Std residual: {results['energy']['std_residual']:.2f} W/m²\n")
-        f.write(f"RMSE: {results['energy']['rmse']:.2f} W/m²\n")
-        f.write(f"Relative error: {results['energy']['relative_error_pct']:.2f}%\n\n")
+        f.write("="*80 + "\n\n")
 
-        if results['energy']['rmse'] < 10:
-            f.write("Assessment: EXCELLENT - Model maintains strong energy conservation\n\n")
-        elif results['energy']['rmse'] < 30:
-            f.write("Assessment: GOOD - Model shows good energy conservation\n\n")
-        elif results['energy']['rmse'] < 50:
-            f.write("Assessment: ACCEPTABLE - Minor deviations from energy conservation\n\n")
+        f.write("Conservation Check:\n")
+        f.write("  Equation:  residual = input - output\n")
+        f.write("  Formula:   (FSA - FIRA) - (HFX + LH + GRDFLX)\n\n")
+
+        f.write("Statistics (W/m²):\n")
+        f.write(f"  Mean residual:     {results['energy']['mean_residual']:>10.2f}\n")
+        f.write(f"  Std residual:      {results['energy']['std_residual']:>10.2f}\n")
+        f.write(f"  RMSE:              {results['energy']['rmse']:>10.2f}\n")
+        f.write(f"  Relative error:    {results['energy']['relative_error_pct']:>10.2f} %\n\n")
+
+        f.write("Assessment Criteria:\n")
+        f.write("  EXCELLENT:    RMSE < 10 W/m²\n")
+        f.write("  GOOD:         RMSE < 30 W/m²\n")
+        f.write("  ACCEPTABLE:   RMSE < 50 W/m²\n")
+        f.write("  POOR:         RMSE >= 50 W/m²\n\n")
+
+        f.write(f"Result: {energy_assessment}\n")
+        if energy_assessment == 'EXCELLENT':
+            f.write("  ✓ Model maintains excellent energy conservation\n")
+            f.write("  ✓ Predictions are physically consistent\n\n")
+        elif energy_assessment == 'GOOD':
+            f.write("  ✓ Model shows good energy conservation\n")
+            f.write("  ✓ Predictions are generally physically consistent\n\n")
+        elif energy_assessment == 'ACCEPTABLE':
+            f.write("  ⚠ Minor deviations from perfect energy conservation\n")
+            f.write("  ⚠ Consider model refinement for critical applications\n\n")
         else:
-            f.write("Assessment: POOR - Significant energy conservation violations\n\n")
+            f.write("  ✗ Significant energy conservation violations detected\n")
+            f.write("  ✗ Model requires further training or architecture changes\n\n")
 
+        f.write("="*80 + "\n")
         f.write("WATER CONSERVATION\n")
-        f.write("-"*80 + "\n")
-        f.write(f"Mean residual: {results['water']['mean_residual']:.4f} mm/day\n")
-        f.write(f"Std residual: {results['water']['std_residual']:.4f} mm/day\n")
-        f.write(f"RMSE: {results['water']['rmse']:.4f} mm/day\n\n")
+        f.write("="*80 + "\n\n")
 
-        f.write(f"Cumulative water balance (mm):\n")
-        f.write(f"  Input (Precipitation): {results['water']['cumulative_precip']:.2f}\n")
-        f.write(f"  Output (ET): {results['water']['cumulative_et']:.2f}\n")
-        f.write(f"  Output (Runoff): {results['water']['cumulative_runoff']:.2f}\n")
-        f.write(f"  Total output: {results['water']['cumulative_et'] + results['water']['cumulative_runoff']:.2f}\n\n")
+        f.write("Conservation Check:\n")
+        f.write("  Equation:  residual = input - output - change\n")
+        f.write("  Formula:   Precipitation - (ET + Runoff + ΔStorage)\n\n")
 
-        if results['water']['rmse'] < 0.1:
-            f.write("Assessment: EXCELLENT - Model maintains strong water conservation\n\n")
-        elif results['water']['rmse'] < 0.5:
-            f.write("Assessment: GOOD - Model shows good water conservation\n\n")
-        elif results['water']['rmse'] < 1.0:
-            f.write("Assessment: ACCEPTABLE - Minor deviations from water conservation\n\n")
+        f.write("Statistics (mm/day):\n")
+        f.write(f"  Mean residual:     {results['water']['mean_residual']:>10.4f}\n")
+        f.write(f"  Std residual:      {results['water']['std_residual']:>10.4f}\n")
+        f.write(f"  RMSE:              {results['water']['rmse']:>10.4f}\n\n")
+
+        f.write("Cumulative Water Balance (mm):\n")
+        total_output = results['water']['cumulative_et'] + results['water']['cumulative_runoff']
+        f.write(f"  Precipitation (Input):     {results['water']['cumulative_precip']:>10.2f}\n")
+        f.write(f"  ET (Output):               {results['water']['cumulative_et']:>10.2f}\n")
+        f.write(f"  Runoff (Output):           {results['water']['cumulative_runoff']:>10.2f}\n")
+        f.write(f"  Total Output:              {total_output:>10.2f}\n")
+        f.write(f"  Imbalance:                 {results['water']['cumulative_precip'] - total_output:>10.2f}\n\n")
+
+        f.write("Assessment Criteria:\n")
+        f.write("  EXCELLENT:    RMSE < 0.1 mm/day\n")
+        f.write("  GOOD:         RMSE < 0.5 mm/day\n")
+        f.write("  ACCEPTABLE:   RMSE < 1.0 mm/day\n")
+        f.write("  POOR:         RMSE >= 1.0 mm/day\n\n")
+
+        f.write(f"Result: {water_assessment}\n")
+        if water_assessment == 'EXCELLENT':
+            f.write("  ✓ Model maintains excellent water conservation\n")
+            f.write("  ✓ Water balance is highly accurate\n\n")
+        elif water_assessment == 'GOOD':
+            f.write("  ✓ Model shows good water conservation\n")
+            f.write("  ✓ Water balance is generally accurate\n\n")
+        elif water_assessment == 'ACCEPTABLE':
+            f.write("  ⚠ Minor deviations from perfect water conservation\n")
+            f.write("  ⚠ Consider model refinement for hydrological applications\n\n")
         else:
-            f.write("Assessment: POOR - Significant water conservation violations\n\n")
+            f.write("  ✗ Significant water conservation violations detected\n")
+            f.write("  ✗ Model requires further training or architecture changes\n\n")
 
         f.write("="*80 + "\n")
-        f.write("CONCLUSION\n")
+        f.write("SUMMARY & RECOMMENDATIONS\n")
+        f.write("="*80 + "\n\n")
+
+        f.write("Physical Consistency:\n")
+        f.write("  Conservation laws are fundamental physical constraints that must be\n")
+        f.write("  satisfied by any realistic Earth system model. This validation tests\n")
+        f.write("  whether the LSTM emulator has learned to respect these constraints.\n\n")
+
+        overall_pass = energy_assessment in ['EXCELLENT', 'GOOD'] and water_assessment in ['EXCELLENT', 'GOOD']
+        if overall_pass:
+            f.write("Overall Assessment: PASS\n")
+            f.write("  ✓ Model demonstrates strong physical consistency\n")
+            f.write("  ✓ Suitable for use in climate/hydrological applications\n")
+            f.write("  ✓ Predictions respect fundamental conservation laws\n\n")
+        else:
+            f.write("Overall Assessment: NEEDS IMPROVEMENT\n")
+            f.write("  ⚠ Model shows conservation violations\n")
+            f.write("  ⚠ Recommendations:\n")
+            f.write("     - Increase training data or epochs\n")
+            f.write("     - Adjust loss function to emphasize conservation variables\n")
+            f.write("     - Consider physics-informed neural network approaches\n")
+            f.write("     - Review data preprocessing and normalization\n\n")
+
+        f.write("Generated Files:\n")
+        f.write(f"  - {results_file.name} (detailed numerical results)\n")
+        f.write(f"  - comprehensive_conservation_summary.png (aggregated plots)\n")
+        if args.sample_detail is not None:
+            f.write(f"  - energy_conservation_improved.png (detailed energy plots)\n")
+            f.write(f"  - water_conservation_improved.png (detailed water plots)\n\n")
+        else:
+            f.write("\n")
+
         f.write("="*80 + "\n")
-        f.write("The comprehensive model predicts all energy and water cycle variables.\n")
-        f.write("Conservation laws provide a physical consistency check on predictions.\n")
-        f.write("Strong conservation indicates the model has learned physically realistic\n")
-        f.write("relationships between inputs and outputs.\n")
 
     print(f"Report saved to: {report_file}")
 
