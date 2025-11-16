@@ -177,18 +177,6 @@ WATER_STORAGE_TARGETS = [
         'description': 'Canopy liquid water content (mm)',
         'category': 'water_storage'
     },
-    {
-        'name': 'CANICE',
-        'aggregation': 'mean',
-        'description': 'Canopy ice water content (mm)',
-        'category': 'water_storage'
-    },
-    {
-        'name': 'SNEQV',
-        'aggregation': 'mean',
-        'description': 'Snow water equivalent (mm)',
-        'category': 'water_storage'
-    },
 ]
 
 # Temperature Variables (for energy/water coupling)
@@ -340,8 +328,6 @@ OUTPUT_WEIGHTS = {
     'SOIL_M_L3': 1.5,
     'SOIL_M_L4': 1.5,
     'CANLIQ': 1.0,
-    'CANICE': 1.0,
-    'SNEQV': 1.0,
 
     # Temperature (important for coupling)
     'SOIL_T': 1.5,

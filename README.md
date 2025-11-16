@@ -5,14 +5,14 @@ Deep learning emulator for the Noah-MP land surface model using LSTM networks to
 ## Overview
 
 This project provides a comprehensive LSTM-based emulator that:
-- Predicts **31 energy and water cycle variables** from Noah-MP simulations
+- Predicts **29 energy and water cycle variables** from Noah-MP simulations
 - Enables **fast parameter sensitivity analysis** and uncertainty quantification
 - Maintains **physical conservation** of energy and water budgets
 - Supports multiple LSTM architectures (LSTM, BiLSTM, Attention-LSTM)
 
 ### Key Features
 
-- **Comprehensive Output**: 31 variables covering energy balance, water fluxes, storage, and temperature
+- **Comprehensive Output**: 29 variables covering energy balance, water fluxes, storage, and temperature
 - **Physical Consistency**: Full energy and water conservation validation
 - **Multiple Architectures**: Choose from LSTM, BiLSTM, or Attention-LSTM models
 - **Flexible Training**: Configurable loss weights to prioritize critical variables
@@ -47,7 +47,7 @@ LSTM_Emulator_4_Noahmp/
     └── processed_data_forward_comprehensive.pkl
 ```
 
-## Target Variables (31 Total)
+## Target Variables (29 Total)
 
 ### Energy Balance (5 variables)
 Core energy conservation: `FSA - FIRA = HFX + LH + GRDFLX`
@@ -82,7 +82,7 @@ UGDRNOFF  - Accumulated underground runoff (mm)
 SFCRNOFF  - Accumulated surface runoff (mm)
 ```
 
-### Water Storage (7 variables)
+### Water Storage (5 variables)
 Water storage state variables
 
 ```
@@ -91,8 +91,6 @@ SOIL_M_L2 - Volumetric soil moisture Layer 2 (m³/m³)
 SOIL_M_L3 - Volumetric soil moisture Layer 3 (m³/m³)
 SOIL_M_L4 - Volumetric soil moisture Layer 4 (m³/m³)
 CANLIQ    - Canopy liquid water content (mm)
-CANICE    - Canopy ice water content (mm)
-SNEQV     - Snow water equivalent (mm)
 ```
 
 ### Temperature (5 variables)
