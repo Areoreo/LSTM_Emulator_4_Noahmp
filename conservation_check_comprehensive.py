@@ -169,13 +169,11 @@ class ComprehensiveConservationChecker:
         edir = predictions['EDIR'] * self.timestep_seconds
         total_et = ecan + etran + edir
 
-        # Output: Runoff (accumulated mm -> daily rates)
-        ugdrnoff_cumul = predictions['UGDRNOFF']
-        sfcrnoff_cumul = predictions['SFCRNOFF']
-
-        # Convert accumulated to daily rates
-        ugdrnoff_rate = np.diff(ugdrnoff_cumul, prepend=ugdrnoff_cumul[0])
-        sfcrnoff_rate = np.diff(sfcrnoff_cumul, prepend=sfcrnoff_cumul[0])
+        # Output: Runoff rates (mm/day) - now predicted directly as rates
+        # Note: Variable names changed from UGDRNOFF/SFCRNOFF (accumulated)
+        # to UGDRNOFF_RATE/SFCRNOFF_RATE (daily rates) during preprocessing
+        ugdrnoff_rate = predictions['UGDRNOFF_RATE']
+        sfcrnoff_rate = predictions['SFCRNOFF_RATE']
         total_runoff = ugdrnoff_rate + sfcrnoff_rate
 
         # Change: Storage variables (mm)

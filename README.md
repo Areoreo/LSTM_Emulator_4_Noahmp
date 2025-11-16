@@ -75,11 +75,11 @@ GHV        - Ground heat to soil
 Water cycle fluxes
 
 ```
-ECAN      - Canopy water evaporation rate (mm/s)
-ETRAN     - Transpiration rate (mm/s)
-EDIR      - Direct soil evaporation rate (mm/s)
-UGDRNOFF  - Accumulated underground runoff (mm)
-SFCRNOFF  - Accumulated surface runoff (mm)
+ECAN             - Canopy water evaporation rate (mm/s)
+ETRAN            - Transpiration rate (mm/s)
+EDIR             - Direct soil evaporation rate (mm/s)
+UGDRNOFF_RATE    - Underground runoff rate (mm/day)
+SFCRNOFF_RATE    - Surface runoff rate (mm/day)
 ```
 
 ### Water Storage (5 variables)
@@ -319,7 +319,7 @@ FSA - FIRA = HFX + LH + GRDFLX
 
 **Components:**
 - Total ET = `ECAN + ETRAN + EDIR` (converted to mm/day)
-- Total Runoff = `ΔUGDRNOFF + ΔSFCRNOFF`
+- Total Runoff = `UGDRNOFF_RATE + SFCRNOFF_RATE` (mm/day)
 - Storage = Sum of all soil layers + canopy + snow
 
 ## Troubleshooting

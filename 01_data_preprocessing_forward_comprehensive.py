@@ -63,7 +63,13 @@ def load_simulation_data(sample_idx, data_dir='data/raw/sim_results'):
     target_data = {'time': times}
     for var_config in config.TARGET_VARIABLES:
         var_name = var_config['name']
-        output_name = var_config.get('output_name', var_name)
+
+        # For variables that need accumulated-to-rate conversion,
+        # use raw name initially (conversion happens later)
+        if var_config.get('convert_accumulated_to_rate', False):
+            output_name = var_name
+        else:
+            output_name = var_config.get('output_name', var_name)
 
         if var_name not in ds:
             print(f"Warning: Target variable '{var_name}' not found in sample {sample_idx}")
@@ -108,10 +114,34 @@ def load_simulation_data(sample_idx, data_dir='data/raw/sim_results'):
     # Target aggregation
     target_agg_dict = {}
     for var_config in config.TARGET_VARIABLES:
-        output_name = var_config.get('output_name', var_config['name'])
-        target_agg_dict[output_name] = var_config['aggregation']
+        # Use raw name for aggregation (same as column name in DataFrame)
+        # For variables with conversion, use raw name; they'll be renamed after conversion
+        if var_config.get('convert_accumulated_to_rate', False):
+            col_name = var_config['name']
+        else:
+            col_name = var_config.get('output_name', var_config['name'])
+        target_agg_dict[col_name] = var_config['aggregation']
 
     target_daily = target_df.groupby('date').agg(target_agg_dict).reset_index()
+
+    # Convert accumulated runoff variables to daily rates
+    # UGDRNOFF and SFCRNOFF are accumulated values that increase monotonically
+    # We need to compute the daily change (rate) for proper model training
+    if 'UGDRNOFF' in target_daily.columns:
+        ugdrnoff_accumulated = target_daily['UGDRNOFF'].values
+        ugdrnoff_rate = np.diff(ugdrnoff_accumulated, prepend=ugdrnoff_accumulated[0])
+        # First day rate should be the first accumulated value (not 0)
+        ugdrnoff_rate[0] = ugdrnoff_accumulated[0]
+        target_daily['UGDRNOFF_RATE'] = ugdrnoff_rate
+        target_daily.drop('UGDRNOFF', axis=1, inplace=True)
+
+    if 'SFCRNOFF' in target_daily.columns:
+        sfcrnoff_accumulated = target_daily['SFCRNOFF'].values
+        sfcrnoff_rate = np.diff(sfcrnoff_accumulated, prepend=sfcrnoff_accumulated[0])
+        # First day rate should be the first accumulated value (not 0)
+        sfcrnoff_rate[0] = sfcrnoff_accumulated[0]
+        target_daily['SFCRNOFF_RATE'] = sfcrnoff_rate
+        target_daily.drop('SFCRNOFF', axis=1, inplace=True)
 
     # Add temporal features to forcing
     if config.ADD_TIME_FEATURES:

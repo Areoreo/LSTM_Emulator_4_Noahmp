@@ -125,16 +125,20 @@ WATER_FLUX_TARGETS = [
         'category': 'water_fluxes'
     },
     {
-        'name': 'UGDRNOFF',
-        'aggregation': 'last',  # Accumulated, so take last value
-        'description': 'Accumulated underground runoff (mm)',
-        'category': 'water_fluxes'
+        'name': 'UGDRNOFF',  # Variable in NetCDF (accumulated)
+        'output_name': 'UGDRNOFF_RATE',  # After conversion to rate
+        'aggregation': 'last',  # Take last accumulated value of the day
+        'description': 'Underground runoff rate (mm/day)',
+        'category': 'water_fluxes',
+        'convert_accumulated_to_rate': True  # Flag for preprocessing
     },
     {
-        'name': 'SFCRNOFF',
-        'aggregation': 'last',  # Accumulated, so take last value
-        'description': 'Accumulated surface runoff (mm)',
-        'category': 'water_fluxes'
+        'name': 'SFCRNOFF',  # Variable in NetCDF (accumulated)
+        'output_name': 'SFCRNOFF_RATE',  # After conversion to rate
+        'aggregation': 'last',  # Take last accumulated value of the day
+        'description': 'Surface runoff rate (mm/day)',
+        'category': 'water_fluxes',
+        'convert_accumulated_to_rate': True  # Flag for preprocessing
     },
 ]
 
@@ -284,8 +288,8 @@ MODEL_CONFIG = {
 TRAINING_CONFIG = {
     'learning_rate': 0.0005,  # Lower for stability
     'batch_size': 8,          # Smaller due to more outputs
-    'num_epochs': 1000,
-    'patience': 50,
+    'num_epochs': 100,
+    'patience': 10,
     'train_ratio': 0.8,
 }
 
@@ -319,8 +323,8 @@ OUTPUT_WEIGHTS = {
     'ECAN': 2.0,
     'ETRAN': 2.0,
     'EDIR': 2.0,
-    'UGDRNOFF': 1.5,
-    'SFCRNOFF': 1.5,
+    'UGDRNOFF_RATE': 2.0,  # Increased weight for runoff rates (critical for water conservation)
+    'SFCRNOFF_RATE': 2.0,  # Increased weight for runoff rates (critical for water conservation)
 
     # Water storage (important for state)
     'SOIL_M': 2.0,
