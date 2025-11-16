@@ -283,8 +283,8 @@ OUTPUT_FILE = 'data/processed_data_forward_comprehensive.pkl'
 
 MODEL_CONFIG = {
     'model_type': 'AttentionLSTM',  # Options: 'LSTM', 'BiLSTM', 'AttentionLSTM'
-    'hidden_dim': 1536,  # Increased for more outputs
-    'num_layers': 3,     # Increased for complexity
+    'hidden_dim': 512,  # Increased for more outputs
+    'num_layers': 2,     # Increased for complexity
     'dropout': 0.3,
     'param_embedding_dim': 128,  # Increased for richer parameter representation
 }
@@ -297,7 +297,7 @@ TRAINING_CONFIG = {
     'learning_rate': 0.0005,  # Lower for stability
     'batch_size': 8,          # Smaller due to more outputs
     'num_epochs': 1000,
-    'patience': 10,
+    'patience': 50,
     'train_ratio': 0.8,
 }
 

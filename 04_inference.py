@@ -22,7 +22,10 @@ from pathlib import Path
 import argparse
 
 from lstm_model_forward import LSTMForwardPredictor, BiLSTMForwardPredictor, AttentionLSTMForwardPredictor
-import config_forward as config
+import config_forward_comprehensive as config
+
+# Main target variables for observation comparison
+MAIN_TARGET_VARS = ['SOIL_M', 'LH', 'HFX']
 
 
 def load_model(model_dir, device='cpu'):
@@ -214,15 +217,18 @@ def predict(model, params, forcing, data_dict, device='cpu'):
 def load_observations_from_csv(obs_file, dates, target_var_names):
     """
     Load observation data from CSV file and align with prediction dates
+    Only loads main target variables (SOIL_M, LH, HFX) for comparison
 
     Args:
         obs_file: Path to observation CSV file
         dates: Array of prediction dates
-        target_var_names: List of target variable names
+        target_var_names: List of all target variable names (for indexing)
 
     Returns:
-        obs_array: Array of observations (n_timesteps, n_target_vars)
+        obs_array: Array of observations (n_timesteps, n_main_vars)
         valid_mask: Boolean mask indicating which timesteps have valid observations
+        obs_var_names: List of variable names that have observations
+        obs_indices: Indices in target_var_names for variables with observations
     """
     print(f"\nLoading observations from: {obs_file}")
 
@@ -232,36 +238,54 @@ def load_observations_from_csv(obs_file, dates, target_var_names):
     # Convert date column to datetime
     obs_df['date'] = pd.to_datetime(obs_df['date']).dt.date
 
+    # Identify which main variables are available in the CSV
+    available_vars = [col for col in obs_df.columns if col != 'date']
+    obs_var_names = [var for var in MAIN_TARGET_VARS if var in available_vars]
+
+    if not obs_var_names:
+        raise ValueError(
+            f"No main target variables found in observation file.\n"
+            f"Expected at least one of: {MAIN_TARGET_VARS}\n"
+            f"Found columns: {available_vars}"
+        )
+
+    # Get indices in target_var_names for the observed variables
+    obs_indices = [target_var_names.index(var) for var in obs_var_names]
+
+    print(f"  Main variables with observations: {obs_var_names}")
+    if len(obs_var_names) < len(MAIN_TARGET_VARS):
+        missing = set(MAIN_TARGET_VARS) - set(obs_var_names)
+        print(f"  Note: Missing observations for: {missing}")
+
     # Create prediction dates dataframe
     pred_dates_df = pd.DataFrame({'date': dates})
 
     # Merge observations with prediction dates
     merged = pred_dates_df.merge(obs_df, on='date', how='left')
 
-    # Extract observation arrays
-    obs_array = merged[target_var_names].values  # (n_timesteps, n_target_vars)
+    # Extract observation arrays for available variables
+    obs_array = merged[obs_var_names].values  # (n_timesteps, n_obs_vars)
 
-    # Create valid mask (True where we have observations for all variables)
+    # Create valid mask (True where we have observations for all available variables)
     valid_mask = ~np.isnan(obs_array).any(axis=1)
 
     n_valid = valid_mask.sum()
     n_total = len(dates)
 
     print(f"  ✓ Loaded observations: {n_valid}/{n_total} days with valid data")
-    print(f"  Variables: {target_var_names}")
 
-    return obs_array, valid_mask
+    return obs_array, valid_mask, obs_var_names, obs_indices
 
 
-def compute_metrics(obs, pred, target_var_names, valid_mask=None):
+def compute_metrics(obs, pred, obs_var_names, valid_mask=None):
     """
     Compute metrics comparing observations and predictions
-    Uses the same approach as 02_train_forward.py
+    Only computes metrics for variables that have observations
 
     Args:
-        obs: Observations array (n_timesteps, n_target_vars)
-        pred: Predictions array (n_timesteps, n_target_vars)
-        target_var_names: List of target variable names
+        obs: Observations array (n_timesteps, n_obs_vars)
+        pred: Predictions array (n_timesteps, n_obs_vars)
+        obs_var_names: List of variable names with observations
         valid_mask: Boolean mask for valid observations (optional)
 
     Returns:
@@ -271,10 +295,9 @@ def compute_metrics(obs, pred, target_var_names, valid_mask=None):
         obs = obs[valid_mask]
         pred = pred[valid_mask]
 
-    n_target_vars = obs.shape[1]
     metrics = {}
 
-    for i, var_name in enumerate(target_var_names):
+    for i, var_name in enumerate(obs_var_names):
         obs_var = obs[:, i]
         pred_var = pred[:, i]
 
@@ -292,16 +315,15 @@ def compute_metrics(obs, pred, target_var_names, valid_mask=None):
             }
             continue
 
-        # Compute R² (same as training script)
+        # Compute R²
         ss_res = np.sum((obs_var - pred_var) ** 2)
         ss_tot = np.sum((obs_var - obs_var.mean()) ** 2)
         r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
 
-        # Compute RMSE (same as training script)
+        # Compute RMSE
         rmse = np.sqrt(np.mean((obs_var - pred_var) ** 2))
 
         # Compute PBIAS (Percent Bias)
-        # PBIAS = 100 * sum(predicted - observed) / sum(observed)
         pbias = 100 * np.sum(pred_var - obs_var) / np.sum(obs_var) if np.sum(obs_var) != 0 else np.nan
 
         metrics[var_name] = {
@@ -356,16 +378,20 @@ def save_predictions_csv(predictions, dates, target_var_names, output_file):
 
 
 def plot_predictions(predictions, dates, target_var_names, observations=None,
-                     valid_mask=None, param_set_idx=1, save_path=None):
+                     valid_mask=None, obs_var_names=None, obs_indices=None,
+                     param_set_idx=1, save_path=None):
     """
     Plot predicted time series with optional observations overlay
+    Only plots variables with observations when observations are provided
 
     Args:
         predictions: Predictions array (n_timesteps, n_target_vars) or (1, n_timesteps, n_target_vars)
         dates: List of dates
-        target_var_names: List of target variable names
-        observations: Observations array (n_timesteps, n_target_vars), optional
+        target_var_names: List of all target variable names
+        observations: Observations array (n_timesteps, n_obs_vars), optional
         valid_mask: Boolean mask for valid observations, optional
+        obs_var_names: List of variable names with observations, optional
+        obs_indices: Indices in target_var_names for variables with observations, optional
         param_set_idx: Parameter set index (for title)
         save_path: Path to save plot
     """
@@ -373,23 +399,32 @@ def plot_predictions(predictions, dates, target_var_names, observations=None,
     if predictions.ndim == 3:
         predictions = predictions[0]
 
-    n_target_vars = len(target_var_names)
+    # If observations provided, only plot those variables
+    if observations is not None and obs_var_names is not None and obs_indices is not None:
+        vars_to_plot = obs_var_names
+        pred_indices = obs_indices
+    else:
+        # Plot all variables
+        vars_to_plot = target_var_names
+        pred_indices = list(range(len(target_var_names)))
 
-    fig, axes = plt.subplots(n_target_vars, 1, figsize=(12, 3 * n_target_vars))
+    n_vars_to_plot = len(vars_to_plot)
 
-    if n_target_vars == 1:
+    fig, axes = plt.subplots(n_vars_to_plot, 1, figsize=(12, 3 * n_vars_to_plot))
+
+    if n_vars_to_plot == 1:
         axes = [axes]
 
-    for i, var_name in enumerate(target_var_names):
-        ax = axes[i]
+    for plot_idx, (var_name, pred_idx) in enumerate(zip(vars_to_plot, pred_indices)):
+        ax = axes[plot_idx]
 
         # Plot predictions
-        ax.plot(dates, predictions[:, i], linewidth=2, alpha=0.8, color='blue',
+        ax.plot(dates, predictions[:, pred_idx], linewidth=2, alpha=0.8, color='blue',
                 label='Predicted', zorder=2)
 
         # Plot observations if available
         if observations is not None:
-            obs_to_plot = observations[:, i].copy()
+            obs_to_plot = observations[:, plot_idx].copy()
             if valid_mask is not None:
                 # Set invalid observations to NaN so they don't plot
                 obs_to_plot[~valid_mask] = np.nan
@@ -423,15 +458,17 @@ def plot_predictions(predictions, dates, target_var_names, observations=None,
     plt.close()
 
 
-def plot_scatter(predictions, observations, target_var_names, metrics,
+def plot_scatter(predictions, observations, obs_var_names, obs_indices, metrics,
                  valid_mask=None, param_set_idx=1, save_path=None):
     """
     Plot scatter plots of predictions vs observations
+    Only plots variables with observations
 
     Args:
         predictions: Predictions array (n_timesteps, n_target_vars) or (1, n_timesteps, n_target_vars)
-        observations: Observations array (n_timesteps, n_target_vars)
-        target_var_names: List of target variable names
+        observations: Observations array (n_timesteps, n_obs_vars)
+        obs_var_names: List of variable names with observations
+        obs_indices: Indices in predictions for variables with observations
         metrics: Dictionary of metrics per variable
         valid_mask: Boolean mask for valid observations, optional
         param_set_idx: Parameter set index (for title)
@@ -441,24 +478,24 @@ def plot_scatter(predictions, observations, target_var_names, metrics,
     if predictions.ndim == 3:
         predictions = predictions[0]
 
-    n_target_vars = len(target_var_names)
+    n_obs_vars = len(obs_var_names)
 
     # Calculate subplot layout
-    ncols = min(3, n_target_vars)
-    nrows = (n_target_vars + ncols - 1) // ncols
+    ncols = min(3, n_obs_vars)
+    nrows = (n_obs_vars + ncols - 1) // ncols
 
     fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
 
-    if n_target_vars == 1:
+    if n_obs_vars == 1:
         axes = np.array([axes])
-    axes = axes.flatten() if n_target_vars > 1 else axes
+    axes = axes.flatten() if n_obs_vars > 1 else axes
 
-    for i, var_name in enumerate(target_var_names):
-        ax = axes[i]
+    for plot_idx, (var_name, pred_idx) in enumerate(zip(obs_var_names, obs_indices)):
+        ax = axes[plot_idx]
 
         # Get observations and predictions for this variable
-        obs_var = observations[:, i].copy()
-        pred_var = predictions[:, i].copy()
+        obs_var = observations[:, plot_idx].copy()
+        pred_var = predictions[:, pred_idx].copy()
 
         # Apply valid mask if provided
         if valid_mask is not None:
@@ -501,10 +538,10 @@ def plot_scatter(predictions, observations, target_var_names, metrics,
         ax.set_aspect('equal', adjustable='box')
 
     # Hide unused subplots
-    for j in range(i + 1, len(axes)):
+    for j in range(plot_idx + 1, len(axes)):
         axes[j].axis('off')
 
-    plt.suptitle('Predictions vs Observations', fontsize=14, fontweight='bold')
+    plt.suptitle('Predictions vs Observations (Main Variables)', fontsize=14, fontweight='bold')
     plt.tight_layout()
 
     if save_path:
@@ -523,31 +560,37 @@ def main():
         epilog="""
 Examples:
   # Single parameter set (no observations)
-  python 03_inference.py \\
-    --model_dir results_forward/AttentionLSTM_20251113_130927_dim-256_layer-2 \\
+  python 04_inference.py \\
+    --model_dir results_forward_comprehensive/AttentionLSTM_20251116_143022_dim-512_layer-2 \\
     --forcing data/raw/forcing/forcing_sample_1.nc \\
     --params data/raw/param/test_params.txt \\
     --output predictions.csv \\
     --plot
 
   # Single parameter set with observations comparison
-  python 03_inference.py \\
-    --model_dir results_forward/AttentionLSTM_20251113_130927_dim-256_layer-2 \\
+  # Note: Observation file only needs main variables (SOIL_M, LH, HFX)
+  python 04_inference.py \\
+    --model_dir results_forward_comprehensive/AttentionLSTM_20251116_143022_dim-512_layer-2 \\
     --forcing data/raw/forcing/forcing_sample_1.nc \\
     --params data/raw/param/test_params.txt \\
-    --obs data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv \\
+    --obs data/obs/observations.csv \\
     --output predictions.csv \\
     --plot
 
   # Multiple parameter sets with observations
-  python 03_inference.py \\
-    --model_dir results_forward/AttentionLSTM_20251113_130927_dim-256_layer-2 \\
+  python 04_inference.py \\
+    --model_dir results_forward_comprehensive/AttentionLSTM_20251116_143022_dim-512_layer-2 \\
     --forcing data/raw/forcing/forcing_sample_1.nc \\
     --params data/raw/param/noahmp_param_sets.txt \\
-    --obs data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv \\
+    --obs data/obs/observations.csv \\
     --output predictions.csv \\
     --max_samples 5 \\
     --plot
+
+  # Observation CSV format (only main variables needed):
+  # date,SOIL_M,LH,HFX
+  # 2015-07-30,0.25,120.5,45.2
+  # 2015-07-31,0.24,118.3,43.1
         """
     )
     parser.add_argument('--model_dir', type=str, required=True,
@@ -559,7 +602,8 @@ Examples:
     parser.add_argument('--output', type=str, required=True,
                        help='Output CSV file path')
     parser.add_argument('--obs', type=str, default=None,
-                       help='CSV file with observations (same format as output, with date column)')
+                       help='CSV file with observations for main target variables (SOIL_M, LH, HFX). '
+                            'Format: date,SOIL_M,LH,HFX (can include subset of main variables)')
     parser.add_argument('--plot', action='store_true',
                        help='Generate PNG plot (time series and scatter if --obs provided)')
     parser.add_argument('--max_samples', type=int, default=None,
@@ -641,6 +685,8 @@ Examples:
     # Load and compare with observations if provided
     observations = None
     valid_mask = None
+    obs_var_names = None
+    obs_indices = None
     metrics_all = []
 
     if args.obs:
@@ -648,12 +694,17 @@ Examples:
         print("LOADING OBSERVATIONS AND COMPUTING METRICS")
         print('='*60)
 
-        observations, valid_mask = load_observations_from_csv(args.obs, dates, target_var_names)
+        observations, valid_mask, obs_var_names, obs_indices = load_observations_from_csv(
+            args.obs, dates, target_var_names
+        )
 
         # Compute metrics for each sample
         for sample_idx in range(n_samples):
             pred_sample = predictions[sample_idx]  # (n_timesteps, n_target_vars)
-            metrics = compute_metrics(observations, pred_sample, target_var_names, valid_mask)
+            # Extract only the predicted values for variables with observations
+            pred_sample_obs = pred_sample[:, obs_indices]  # (n_timesteps, n_obs_vars)
+
+            metrics = compute_metrics(observations, pred_sample_obs, obs_var_names, valid_mask)
             metrics_all.append(metrics)
 
             print(f"\nMetrics for Parameter Set {sample_idx + 1}:")
@@ -688,12 +739,13 @@ Examples:
             plot_path = output_path.with_suffix('.png')
             plot_predictions(predictions, dates, target_var_names,
                            observations=observations, valid_mask=valid_mask,
+                           obs_var_names=obs_var_names, obs_indices=obs_indices,
                            param_set_idx=1, save_path=plot_path)
 
             # Scatter plot if observations available
             if observations is not None:
                 scatter_path = output_path.parent / f"{output_path.stem}_scatter.png"
-                plot_scatter(predictions, observations, target_var_names,
+                plot_scatter(predictions, observations, obs_var_names, obs_indices,
                            metrics_all[0], valid_mask=valid_mask,
                            param_set_idx=1, save_path=scatter_path)
         else:
@@ -703,12 +755,13 @@ Examples:
                 plot_path = output_path.parent / f"{output_path.stem}_sample_{i+1}.png"
                 plot_predictions(predictions[i:i+1], dates, target_var_names,
                                observations=observations, valid_mask=valid_mask,
+                               obs_var_names=obs_var_names, obs_indices=obs_indices,
                                param_set_idx=i+1, save_path=plot_path)
 
                 # Scatter plot if observations available
                 if observations is not None:
                     scatter_path = output_path.parent / f"{output_path.stem}_sample_{i+1}_scatter.png"
-                    plot_scatter(predictions[i:i+1], observations, target_var_names,
+                    plot_scatter(predictions[i:i+1], observations, obs_var_names, obs_indices,
                                metrics_all[i], valid_mask=valid_mask,
                                param_set_idx=i+1, save_path=scatter_path)
 

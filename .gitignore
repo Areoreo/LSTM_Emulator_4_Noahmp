@@ -5,6 +5,7 @@ data/
 models/
 inference/
 results/
+results_forward_comprehensive/
 .claude/
 devlog/score_function_val/
 

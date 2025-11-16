@@ -131,6 +131,183 @@ def plot_training_history(train_losses, val_losses, save_path):
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
+def compute_metrics(predictions, targets, var_names):
+    """
+    Compute R², RMSE, and PBIAS metrics for each variable
+
+    Args:
+        predictions: Predicted values (n_samples, n_timesteps, n_vars)
+        targets: True values (n_samples, n_timesteps, n_vars)
+        var_names: List of variable names
+
+    Returns:
+        Dictionary with metrics per variable
+    """
+    # Flatten time dimension
+    pred_flat = predictions.reshape(-1, predictions.shape[-1])  # (n_samples*n_timesteps, n_vars)
+    targ_flat = targets.reshape(-1, targets.shape[-1])
+
+    metrics = {}
+    for i, var_name in enumerate(var_names):
+        pred_var = pred_flat[:, i]
+        targ_var = targ_flat[:, i]
+
+        # R²
+        ss_res = np.sum((targ_var - pred_var) ** 2)
+        ss_tot = np.sum((targ_var - targ_var.mean()) ** 2)
+        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+
+        # RMSE
+        rmse = np.sqrt(np.mean((targ_var - pred_var) ** 2))
+
+        # PBIAS
+        pbias = 100 * np.sum(pred_var - targ_var) / np.sum(targ_var) if np.sum(targ_var) != 0 else 0.0
+
+        metrics[var_name] = {
+            'R2': float(r2),
+            'RMSE': float(rmse),
+            'PBIAS': float(pbias)
+        }
+
+    return metrics
+
+
+def plot_scatter(predictions, targets, var_names, metrics, save_dir, focus_vars=['SOIL_M', 'LH', 'HFX']):
+    """
+    Create scatter plots for all variables (with focus on main target variables)
+
+    Args:
+        predictions: Predicted values (n_samples, n_timesteps, n_vars)
+        targets: True values (n_samples, n_timesteps, n_vars)
+        var_names: List of variable names
+        metrics: Dictionary with metrics per variable
+        save_dir: Directory to save plots
+        focus_vars: Main target variables to highlight
+    """
+    # Flatten time dimension
+    pred_flat = predictions.reshape(-1, predictions.shape[-1])
+    targ_flat = targets.reshape(-1, targets.shape[-1])
+
+    # Plot for focus variables (larger)
+    n_focus = len([v for v in focus_vars if v in var_names])
+    if n_focus > 0:
+        fig, axes = plt.subplots(1, n_focus, figsize=(6*n_focus, 5))
+        if n_focus == 1:
+            axes = [axes]
+
+        ax_idx = 0
+        for var_name in focus_vars:
+            if var_name not in var_names:
+                continue
+
+            i = var_names.index(var_name)
+            ax = axes[ax_idx]
+
+            # Scatter plot
+            ax.scatter(targ_flat[:, i], pred_flat[:, i], alpha=0.3, s=10, edgecolors='none')
+
+            # 1:1 line
+            min_val = min(targ_flat[:, i].min(), pred_flat[:, i].min())
+            max_val = max(targ_flat[:, i].max(), pred_flat[:, i].max())
+            ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='1:1 Line')
+
+            # Add metrics
+            m = metrics[var_name]
+            textstr = f"R² = {m['R2']:.3f}\nRMSE = {m['RMSE']:.3f}\nPBIAS = {m['PBIAS']:.2f}%"
+            ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=11,
+                   verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+            ax.set_xlabel(f'Observed {var_name}', fontsize=12)
+            ax.set_ylabel(f'Predicted {var_name}', fontsize=12)
+            ax.set_title(f'{var_name}', fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=10)
+            ax.set_aspect('equal', adjustable='box')
+
+            ax_idx += 1
+
+        plt.tight_layout()
+        plt.savefig(save_dir / 'validation_scatter_main.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+    # Plot for all variables (smaller subplots)
+    n_vars = len(var_names)
+    ncols = 5
+    nrows = (n_vars + ncols - 1) // ncols
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4*ncols, 4*nrows))
+    axes = axes.flatten() if n_vars > 1 else [axes]
+
+    for i, var_name in enumerate(var_names):
+        ax = axes[i]
+
+        # Scatter plot
+        ax.scatter(targ_flat[:, i], pred_flat[:, i], alpha=0.2, s=5, edgecolors='none')
+
+        # 1:1 line
+        min_val = min(targ_flat[:, i].min(), pred_flat[:, i].min())
+        max_val = max(targ_flat[:, i].max(), pred_flat[:, i].max())
+        ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=1.5)
+
+        # Add R² only
+        m = metrics[var_name]
+        ax.text(0.05, 0.95, f"R²={m['R2']:.3f}", transform=ax.transAxes, fontsize=9,
+               verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
+
+        ax.set_xlabel(f'Obs', fontsize=9)
+        ax.set_ylabel(f'Pred', fontsize=9)
+        ax.set_title(var_name, fontsize=10, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(labelsize=8)
+
+    # Hide unused subplots
+    for j in range(i + 1, len(axes)):
+        axes[j].axis('off')
+
+    plt.suptitle('Validation: All Variables', fontsize=16, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(save_dir / 'validation_scatter_all.png', dpi=200, bbox_inches='tight')
+    plt.close()
+
+
+def validate_on_set(model, dataloader, data_dict, device):
+    """
+    Run validation and return predictions and targets (denormalized)
+
+    Args:
+        model: Trained model
+        dataloader: DataLoader for validation set
+        data_dict: Dictionary with normalization statistics
+        device: Device to run on
+
+    Returns:
+        predictions, targets (both denormalized)
+    """
+    model.eval()
+    all_preds = []
+    all_targets = []
+
+    with torch.no_grad():
+        for forcing, params, target in dataloader:
+            forcing = forcing.to(device)
+            params = params.to(device)
+
+            output = model(params, forcing)
+
+            all_preds.append(output.cpu().numpy())
+            all_targets.append(target.numpy())
+
+    # Concatenate
+    predictions = np.concatenate(all_preds, axis=0)  # (n_samples, n_timesteps, n_vars)
+    targets = np.concatenate(all_targets, axis=0)
+
+    # Denormalize
+    predictions = predictions * data_dict['y_std'] + data_dict['y_mean']
+    targets = targets * data_dict['y_std'] + data_dict['y_mean']
+
+    return predictions, targets
+
+
 def main():
     """Main training function"""
     set_seed(42)
@@ -220,9 +397,13 @@ def main():
     train_losses = []
     val_losses = []
 
-    # Create results directory
-    results_dir = Path(config.RESULTS_DIR)
+    # Create results directory with timestamp
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    model_name = f"{config.MODEL_CONFIG['model_type']}_{timestamp}_dim-{config.MODEL_CONFIG['hidden_dim']}_layer-{config.MODEL_CONFIG['num_layers']}"
+    results_dir = Path(config.RESULTS_DIR) / model_name
     results_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\nResults directory: {results_dir}")
 
     for epoch in range(config.TRAINING_CONFIG['num_epochs']):
         train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
@@ -256,9 +437,49 @@ def main():
     print(f"\nTraining complete!")
     print(f"Best validation loss: {best_val_loss:.6f}")
 
+    # Load best model for final validation
+    model.load_state_dict(torch.load(results_dir / 'best_model.pth'))
+    model.eval()
+
     # Plot training history
     plot_training_history(train_losses, val_losses, results_dir / 'training_history.png')
     print(f"Training history plot saved to {results_dir / 'training_history.png'}")
+
+    # Run final validation with metrics
+    print(f"\n{'='*60}")
+    print("RUNNING FINAL VALIDATION")
+    print('='*60)
+
+    val_predictions, val_targets = validate_on_set(model, val_loader, data, device)
+    print(f"Validation predictions shape: {val_predictions.shape}")
+
+    # Compute metrics
+    metrics = compute_metrics(val_predictions, val_targets, data['target_var_names'])
+
+    # Print main target variables metrics
+    print(f"\nMain Target Variables Metrics:")
+    for var_name in ['SOIL_M', 'LH', 'HFX']:
+        if var_name in metrics:
+            m = metrics[var_name]
+            print(f"  {var_name}:")
+            print(f"    R²    = {m['R2']:.4f}")
+            print(f"    RMSE  = {m['RMSE']:.4f}")
+            print(f"    PBIAS = {m['PBIAS']:.2f}%")
+
+    # Print all variables metrics summary
+    print(f"\nAll Variables Summary:")
+    avg_r2 = np.mean([m['R2'] for m in metrics.values()])
+    print(f"  Average R²: {avg_r2:.4f}")
+
+    # Save metrics
+    with open(results_dir / 'validation_metrics.json', 'w') as f:
+        json.dump(metrics, f, indent=2)
+    print(f"\nValidation metrics saved to {results_dir / 'validation_metrics.json'}")
+
+    # Generate scatter plots
+    print(f"\nGenerating validation scatter plots...")
+    plot_scatter(val_predictions, val_targets, data['target_var_names'], metrics, results_dir)
+    print(f"Scatter plots saved to {results_dir}")
 
     # Save configuration
     config_dict = {
@@ -279,7 +500,12 @@ def main():
         'train_samples': len(train_indices),
         'val_samples': len(val_indices),
         'train_ratio': config.TRAINING_CONFIG['train_ratio'],
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        'validation_metrics': {
+            'main_targets': {k: v for k, v in metrics.items() if k in ['SOIL_M', 'LH', 'HFX']},
+            'average_r2': float(avg_r2)
+        },
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'results_dir': str(results_dir)
     }
 
     with open(results_dir / 'config.json', 'w') as f:
@@ -295,7 +521,20 @@ def main():
              best_val_loss=best_val_loss,
              final_epoch=epoch + 1)
 
-    print(f"\nAll results saved to {results_dir}")
+    # Save train/val split indices for reproducibility and validation
+    np.savez(results_dir / 'train_val_indices.npz',
+             train_indices=train_indices,
+             val_indices=val_indices)
+
+    print(f"\n{'='*60}")
+    print(f"✓ TRAINING AND VALIDATION COMPLETE")
+    print('='*60)
+    print(f"\nAll results saved to: {results_dir}")
+    print(f"  - Model: best_model.pth")
+    print(f"  - Config: config.json")
+    print(f"  - Metrics: validation_metrics.json")
+    print(f"  - Plots: training_history.png, validation_scatter_*.png")
+    print(f"  - Loss history: loss_history.npz")
 
 if __name__ == '__main__':
     main()
