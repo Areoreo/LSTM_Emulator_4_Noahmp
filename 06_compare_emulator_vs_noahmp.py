@@ -307,7 +307,7 @@ def main():
 
     # Configuration
     n_samples = 5
-    noahmp_base_dir = Path('inference/calibration_validation_by_noahmp')
+    noahmp_base_dir = Path('inference/samples_SP_panama_forward_calibration')
     emulator_base_dir = Path('inference')
     obs_file = 'data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv'
     output_dir = Path('inference/comparison_results')
@@ -331,7 +331,7 @@ def main():
 
         # Load emulator results
         print("\nLoading emulator results...")
-        emu_file = emulator_base_dir / f'emulator_predictions_sample_{sample_idx}.csv'
+        emu_file = emulator_base_dir / f'predictions_sample_{sample_idx}.csv'
         emu_df = load_emulator_results(emu_file)
         print(f"  ✓ Loaded emulator results: {len(emu_df)} days")
 
