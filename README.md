@@ -35,7 +35,8 @@ LSTM_Emulator_4_Noahmp/
 │
 ├── Inference & Analysis:
 │   ├── 04_inference.py                      # Production inference script
-│   └── 05_comprehensive_conservation_validation.py
+│   ├── 05_comprehensive_conservation_validation.py
+│   └── 06_calibration_applying_emulator.py  # Parameter calibration with ensemble
 │
 ├── Utilities:
 │   ├── conservation_check_comprehensive.py  # Conservation validation
@@ -191,7 +192,38 @@ python 04_inference.py \
   --plot
 ```
 
-### 6. Conservation Validation
+### 6. Parameter Calibration (New!)
+
+Calibrate NoahMP parameters using observations and get multiple results for ensemble prediction:
+
+```bash
+# Get top 5 calibration results for ensemble prediction
+python 06_calibration_applying_emulator.py \
+  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_171820_dim-512_layer-2 \
+  --forcing data/raw/forcing/forcing_sample_1.nc \
+  --obs data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv \
+  --bounds value_bounds.csv \
+  --num_calibration 5 \
+  --output calibration_results
+
+# Get top 10 results for comprehensive ensemble
+python 06_calibration_applying_emulator.py \
+  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_171820_dim-512_layer-2 \
+  --forcing data/raw/forcing/forcing_sample_1.nc \
+  --obs data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv \
+  --bounds value_bounds.csv \
+  --num_calibration 10 \
+  --max_iter 200
+```
+
+**Key Feature**: Returns top N calibration results for:
+- Ensemble prediction (average multiple calibrations)
+- Uncertainty quantification (ensemble spread)
+- Sensitivity analysis (parameter variability)
+
+See `CALIBRATION_USAGE_GUIDE.md` for detailed usage and examples.
+
+### 7. Conservation Validation
 
 Validate physical conservation of energy and water:
 
@@ -276,6 +308,9 @@ date,SOIL_M,LH,HFX,...
 2015-07-30,0.25,120.5,45.2,...
 2015-07-31,0.24,118.3,43.1,...
 ```
+
+**For Calibration**: The project includes observation data at:
+- `data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv` (daily aggregated SOIL_M, LH, HFX)
 
 ## Model Performance
 
@@ -372,6 +407,27 @@ python 04_inference.py \
   --plot
 ```
 
+### Parameter Calibration with Ensemble
+
+Calibrate parameters and generate ensemble predictions for uncertainty quantification:
+
+```bash
+# Step 1: Run calibration to get top 10 parameter sets
+python 06_calibration_applying_emulator.py \
+  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_171820_dim-512_layer-2 \
+  --forcing data/raw/forcing/forcing_sample_1.nc \
+  --obs data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv \
+  --bounds value_bounds.csv \
+  --num_calibration 10 \
+  --output calibration_results
+
+# Step 2: Analyze ensemble results
+# See CALIBRATION_USAGE_GUIDE.md for Python code to:
+# - Compare parameter variability across calibrations
+# - Create ensemble mean and spread predictions
+# - Identify well-constrained vs. poorly-constrained parameters
+```
+
 ## File Outputs
 
 ### Training Output Structure
@@ -413,6 +469,20 @@ predictions.png                    # Time series plots
 predictions_scatter.png            # Scatter plots (if obs provided)
 ```
 
+### Calibration Outputs
+
+```
+calibration_results/
+├── ensemble_summary.json          # Summary of all calibration results
+├── calibration_1/                 # Best calibration result
+│   ├── calibrated_parameters.csv
+│   ├── calibration_result.json
+│   ├── predictions_comparison.csv
+│   └── calibration_results.png
+├── calibration_2/                 # 2nd best result
+└── ...                            # Additional results based on --num_calibration
+```
+
 ## Model Architectures
 
 ### LSTM
@@ -432,6 +502,7 @@ If you use this emulator in your research, please cite:
 
 ## Version History
 
+- **v2.1** (2025-11-20): Added parameter calibration with ensemble prediction support
 - **v2.0** (2025-11-16): Comprehensive model with 31 variables, integrated validation
 - **v1.0** (2025-11-13): Initial 3-variable model
 
@@ -445,8 +516,9 @@ For issues or questions:
 
 ---
 
-**Last Updated:** 2025-11-16
+**Last Updated:** 2025-11-20
 **Status:** Production Ready
 **Model Variants:** LSTM, BiLSTM, Attention-LSTM
-**Target Variables:** 31
+**Target Variables:** 29 (comprehensive output)
 **Conservation:** Full Energy + Water
+**Calibration:** Ensemble-based with uncertainty quantification

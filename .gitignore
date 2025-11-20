@@ -6,6 +6,7 @@ models/
 inference/
 results/
 results_forward_comprehensive/
+calibration_results/
 .claude/
 devlog/score_function_val/
 
