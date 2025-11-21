@@ -269,6 +269,10 @@ PARAMETER_FILE = 'data/raw/param/noahmp_param_sets.txt'
 SIMULATION_DIR = 'data/raw/sim_results'
 OUTPUT_FILE = 'data/processed_data_forward_comprehensive.pkl'
 
+# Parameters that should be log10-transformed before normalization
+# These are parameters that span multiple orders of magnitude
+LOG_TRANSFORM_PARAMS = ['SATDK_CL']
+
 # =============================================================================
 # MODEL CONFIGURATION
 # =============================================================================
@@ -453,6 +457,8 @@ def print_config():
     print(f"  Parameter file: {PARAMETER_FILE}")
     print(f"  Simulation dir: {SIMULATION_DIR}")
     print(f"  Output file: {OUTPUT_FILE}")
+    if LOG_TRANSFORM_PARAMS:
+        print(f"  Log10-transformed parameters: {LOG_TRANSFORM_PARAMS}")
 
     print(f"\nModel Configuration:")
     for key, value in MODEL_CONFIG.items():

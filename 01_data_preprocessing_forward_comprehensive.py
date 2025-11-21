@@ -259,6 +259,29 @@ def preprocess_all_data(max_samples=None, output_file=None):
     # Create parameter array: (n_samples, n_params)
     X_params = params.iloc[valid_indices].values
 
+    # Apply log transformation to specified parameters
+    log_transformed_params = []
+    if config.LOG_TRANSFORM_PARAMS:
+        print(f"\nApplying log10 transformation to parameters: {config.LOG_TRANSFORM_PARAMS}")
+        for param_name in config.LOG_TRANSFORM_PARAMS:
+            if param_name in param_names:
+                param_idx = param_names.index(param_name)
+                # Check original value range
+                orig_min = X_params[:, param_idx].min()
+                orig_max = X_params[:, param_idx].max()
+                print(f"  {param_name}: original range [{orig_min:.2e}, {orig_max:.2e}]")
+
+                # Apply log10 transformation
+                X_params[:, param_idx] = np.log10(X_params[:, param_idx])
+                log_transformed_params.append(param_name)
+
+                # Check transformed value range
+                trans_min = X_params[:, param_idx].min()
+                trans_max = X_params[:, param_idx].max()
+                print(f"  {param_name}: log10 range [{trans_min:.2f}, {trans_max:.2f}]")
+            else:
+                print(f"  Warning: Parameter '{param_name}' not found in parameter file")
+
     # Check for infinite or NaN values
     print("\nChecking data quality...")
     if np.any(np.isnan(X_forcing)) or np.any(np.isinf(X_forcing)):
@@ -306,6 +329,7 @@ def preprocess_all_data(max_samples=None, output_file=None):
         'target_var_names': target_var_names,
         'target_categories': target_categories,
         'param_names': param_names,
+        'log_transformed_params': log_transformed_params,  # Track which params were log-transformed
         'n_timesteps': n_timesteps,
         'valid_indices': valid_indices,
         'failed_indices': failed_samples,
@@ -324,6 +348,8 @@ def preprocess_all_data(max_samples=None, output_file=None):
     print(f"Forcing input shape: {X_forcing_normalized.shape} (samples, timesteps, forcing_vars)")
     print(f"Parameter input shape: {X_params_normalized.shape} (samples, n_params)")
     print(f"Target output shape: {y_normalized.shape} (samples, timesteps, target_vars)")
+    if log_transformed_params:
+        print(f"Log10-transformed parameters: {log_transformed_params}")
     print(f"Saved to: {output_file}")
 
     # Print target variable breakdown
