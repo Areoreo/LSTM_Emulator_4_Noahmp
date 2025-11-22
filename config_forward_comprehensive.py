@@ -277,7 +277,7 @@ LOG_TRANSFORM_PARAMS = ['SATDK_CL']
 # Options: 'z-score' or 'min-max'
 # - 'z-score': Standardization to mean=0, std=1 (better for optimization, unbounded)
 # - 'min-max': Scale to [0, 1] range (preserves bounds, better for calibration)
-NORMALIZATION_METHOD = 'z-score'  # Default: z-score
+NORMALIZATION_METHOD = 'min-max'  # Default: z-score
 
 # =============================================================================
 # MODEL CONFIGURATION

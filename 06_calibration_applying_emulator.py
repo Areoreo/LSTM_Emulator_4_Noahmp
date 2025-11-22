@@ -188,12 +188,21 @@ def predict_with_emulator(model, params, forcing_tensor, data_dict, device='cpu'
     if isinstance(params, np.ndarray):
         params = torch.FloatTensor(params).to(device)
 
-    # Normalize parameters
+    # Normalize parameters using the appropriate method
     if params.dim() == 1:
         params = params.unsqueeze(0)
-    params_mean = torch.FloatTensor(data_dict['X_params_mean']).to(device)
-    params_std = torch.FloatTensor(data_dict['X_params_std']).to(device)
-    params_normalized = (params - params_mean) / (params_std + 1e-8)
+
+    params_stats = data_dict['params_norm_stats']
+    if params_stats['method'] == 'z-score':
+        params_mean = torch.FloatTensor(params_stats['mean']).to(device)
+        params_std = torch.FloatTensor(params_stats['std']).to(device)
+        params_normalized = (params - params_mean) / (params_std + 1e-8)
+    elif params_stats['method'] == 'min-max':
+        params_min = torch.FloatTensor(params_stats['min']).to(device)
+        params_max = torch.FloatTensor(params_stats['max']).to(device)
+        params_normalized = (params - params_min) / (params_max - params_min + 1e-8)
+    else:
+        raise ValueError(f"Unknown normalization method: {params_stats['method']}")
 
     # Forcing is already normalized
     if forcing_tensor.dim() == 2:
@@ -202,10 +211,18 @@ def predict_with_emulator(model, params, forcing_tensor, data_dict, device='cpu'
     # Predict
     predictions_normalized = model(params_normalized, forcing_tensor)
 
-    # Denormalize
-    y_mean = torch.FloatTensor(data_dict['y_mean']).to(device)
-    y_std = torch.FloatTensor(data_dict['y_std']).to(device)
-    predictions = predictions_normalized * y_std + y_mean
+    # Denormalize predictions using the appropriate method
+    targets_stats = data_dict['targets_norm_stats']
+    if targets_stats['method'] == 'z-score':
+        y_mean = torch.FloatTensor(targets_stats['mean']).to(device)
+        y_std = torch.FloatTensor(targets_stats['std']).to(device)
+        predictions = predictions_normalized * y_std + y_mean
+    elif targets_stats['method'] == 'min-max':
+        y_min = torch.FloatTensor(targets_stats['min']).to(device)
+        y_max = torch.FloatTensor(targets_stats['max']).to(device)
+        predictions = predictions_normalized * (y_max - y_min) + y_min
+    else:
+        raise ValueError(f"Unknown normalization method: {targets_stats['method']}")
 
     # Return as numpy or tensor
     if return_numpy:
@@ -481,8 +498,15 @@ def run_calibration_adam(model_dir, forcing_file, obs_file, bounds_file,
     forcing_df = load_forcing_data(forcing_file)
     forcing_array = forcing_df[data_dict['forcing_var_names']].values
 
-    # Normalize and convert to tensor
-    forcing_normalized = (forcing_array - data_dict['X_forcing_mean']) / (data_dict['X_forcing_std'] + 1e-8)
+    # Normalize and convert to tensor using the appropriate method
+    forcing_stats = data_dict['forcing_norm_stats']
+    if forcing_stats['method'] == 'z-score':
+        forcing_normalized = (forcing_array - forcing_stats['mean']) / (forcing_stats['std'] + 1e-8)
+    elif forcing_stats['method'] == 'min-max':
+        forcing_normalized = (forcing_array - forcing_stats['min']) / (forcing_stats['max'] - forcing_stats['min'] + 1e-8)
+    else:
+        raise ValueError(f"Unknown normalization method: {forcing_stats['method']}")
+
     forcing_tensor = torch.FloatTensor(forcing_normalized).to(device)
 
     # Get date range from forcing

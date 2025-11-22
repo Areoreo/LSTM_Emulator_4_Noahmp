@@ -13,9 +13,19 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import json
 from datetime import datetime
+import importlib.util
 
 from lstm_model_forward import LSTMForwardPredictor, BiLSTMForwardPredictor, AttentionLSTMForwardPredictor
 import config_forward_comprehensive as config
+
+# Import denormalize_data function from preprocessing module
+spec = importlib.util.spec_from_file_location(
+    "preprocessing",
+    "01_data_preprocessing_forward_comprehensive.py"
+)
+preprocessing = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(preprocessing)
+denormalize_data = preprocessing.denormalize_data
 
 def set_seed(seed=42):
     """Set random seeds for reproducibility"""
@@ -301,9 +311,9 @@ def validate_on_set(model, dataloader, data_dict, device):
     predictions = np.concatenate(all_preds, axis=0)  # (n_samples, n_timesteps, n_vars)
     targets = np.concatenate(all_targets, axis=0)
 
-    # Denormalize
-    predictions = predictions * data_dict['y_std'] + data_dict['y_mean']
-    targets = targets * data_dict['y_std'] + data_dict['y_mean']
+    # Denormalize using the new API (supports both z-score and min-max)
+    predictions = denormalize_data(predictions, data_dict['targets_norm_stats'])
+    targets = denormalize_data(targets, data_dict['targets_norm_stats'])
 
     return predictions, targets
 
