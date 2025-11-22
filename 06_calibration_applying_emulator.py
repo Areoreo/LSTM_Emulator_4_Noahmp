@@ -338,6 +338,50 @@ def load_parameter_bounds(bounds_file, param_names):
     return np.array(bounds)
 
 
+def load_default_parameters(default_param_file, param_names):
+    """
+    Load default Noah-MP parameters from file
+
+    Args:
+        default_param_file: Path to default parameter file
+        param_names: List of parameter names to extract
+
+    Returns:
+        Array of default parameter values matching param_names order
+    """
+    try:
+        with open(default_param_file, 'r') as f:
+            lines = f.readlines()
+
+        # Parse parameter names and values
+        names_line = lines[0].strip().split()
+        values_line = lines[1].strip().split()
+
+        # Create dictionary mapping parameter names to values
+        default_dict = {}
+        for name, value in zip(names_line, values_line):
+            try:
+                default_dict[name] = float(value)
+            except ValueError:
+                # Handle scientific notation like 9.74E-7
+                default_dict[name] = float(value.replace('E', 'e'))
+
+        # Extract values in the order of param_names
+        default_params = []
+        for param_name in param_names:
+            if param_name in default_dict:
+                default_params.append(default_dict[param_name])
+            else:
+                # Parameter not found, will be handled by caller
+                default_params.append(None)
+
+        return np.array(default_params)
+
+    except Exception as e:
+        print(f"  Warning: Could not load default parameters from {default_param_file}: {e}")
+        return None
+
+
 def initialize_random_params(bounds, baseline_params, calibrate_indices, seed=None):
     """
     Initialize parameters randomly within bounds
@@ -548,8 +592,23 @@ def run_calibration_adam(model_dir, forcing_file, obs_file, bounds_file,
     # Load parameter bounds
     bounds = load_parameter_bounds(bounds_file, param_names)
 
-    # Get baseline parameters (mean from training data)
-    baseline_params = data_dict['X_params_mean'].flatten().copy()
+    # Get baseline parameters
+    # Priority: 1) Default Noah-MP params, 2) Training data mean, 3) Midpoint of bounds
+    default_param_file = Path('data/raw/param/default_param.txt')
+    default_params = load_default_parameters(default_param_file, param_names)
+
+    if default_params is not None and not np.any(default_params == None):
+        # First priority: Use scientifically validated default Noah-MP parameters
+        baseline_params = default_params
+        print(f"  Using Noah-MP default parameters as baseline")
+    elif data_dict['X_params_mean'] is not None:
+        # Second priority: Use mean from training data (for z-score normalization)
+        baseline_params = data_dict['X_params_mean'].flatten().copy()
+        print(f"  Using training data mean as baseline (default params not available)")
+    else:
+        # Fallback: Use midpoint of bounds
+        baseline_params = np.array([(lower + upper) / 2 for lower, upper in bounds])
+        print(f"  Using midpoint of bounds as baseline (default params and mean not available)")
 
     # Run multiple calibrations from random starting points
     print(f"\n[5/6] Running {num_calibration} calibrations from random starting points...")
