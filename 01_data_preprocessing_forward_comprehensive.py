@@ -164,6 +164,71 @@ def load_parameters(param_file='data/raw/param/noahmp_param_sets.txt'):
     params = pd.read_csv(param_file, sep=r'\s+')
     return params
 
+def normalize_data(data, method='z-score', fit_stats=None):
+    """
+    Normalize data using specified method
+
+    Args:
+        data: numpy array to normalize
+        method: 'z-score' or 'min-max'
+        fit_stats: Dict with pre-computed statistics (for inference).
+                   If None, compute from data (for training)
+
+    Returns:
+        tuple: (normalized_data, stats_dict)
+    """
+    if method == 'z-score':
+        if fit_stats is None:
+            # Compute statistics from data
+            mean = np.nanmean(data, axis=tuple(range(data.ndim - 1)), keepdims=True)
+            std = np.nanstd(data, axis=tuple(range(data.ndim - 1)), keepdims=True)
+            stats = {'mean': mean, 'std': std, 'method': 'z-score'}
+        else:
+            mean = fit_stats['mean']
+            std = fit_stats['std']
+            stats = fit_stats
+
+        normalized = (data - mean) / (std + 1e-8)
+
+    elif method == 'min-max':
+        if fit_stats is None:
+            # Compute statistics from data
+            min_val = np.nanmin(data, axis=tuple(range(data.ndim - 1)), keepdims=True)
+            max_val = np.nanmax(data, axis=tuple(range(data.ndim - 1)), keepdims=True)
+            stats = {'min': min_val, 'max': max_val, 'method': 'min-max'}
+        else:
+            min_val = fit_stats['min']
+            max_val = fit_stats['max']
+            stats = fit_stats
+
+        # Scale to [0, 1]
+        normalized = (data - min_val) / (max_val - min_val + 1e-8)
+
+    else:
+        raise ValueError(f"Unknown normalization method: {method}. Use 'z-score' or 'min-max'")
+
+    return normalized, stats
+
+def denormalize_data(normalized_data, stats):
+    """
+    Reverse normalization using stored statistics
+
+    Args:
+        normalized_data: Normalized numpy array
+        stats: Statistics dict from normalize_data()
+
+    Returns:
+        Original scale data
+    """
+    method = stats['method']
+
+    if method == 'z-score':
+        return normalized_data * stats['std'] + stats['mean']
+    elif method == 'min-max':
+        return normalized_data * (stats['max'] - stats['min']) + stats['min']
+    else:
+        raise ValueError(f"Unknown normalization method in stats: {method}")
+
 def preprocess_all_data(max_samples=None, output_file=None):
     """
     Process all samples for comprehensive forward modeling
@@ -291,40 +356,54 @@ def preprocess_all_data(max_samples=None, output_file=None):
     if np.any(np.isnan(y)) or np.any(np.isinf(y)):
         print("Warning: y contains NaN or Inf values")
 
+    # Normalize data using configured method
+    norm_method = config.NORMALIZATION_METHOD
+    print(f"\nNormalizing data using method: {norm_method}")
+
     # Normalize forcing variables (per variable, across samples and time)
-    print("\nNormalizing data...")
-    X_forcing_mean = np.nanmean(X_forcing, axis=(0, 1), keepdims=True)
-    X_forcing_std = np.nanstd(X_forcing, axis=(0, 1), keepdims=True)
-    X_forcing_normalized = (X_forcing - X_forcing_mean) / (X_forcing_std + 1e-8)
+    X_forcing_normalized, forcing_norm_stats = normalize_data(X_forcing, method=norm_method)
 
     # Normalize parameters (per parameter, across samples)
-    X_params_mean = np.nanmean(X_params, axis=0, keepdims=True)
-    X_params_std = np.nanstd(X_params, axis=0, keepdims=True)
-    X_params_normalized = (X_params - X_params_mean) / (X_params_std + 1e-8)
+    X_params_normalized, params_norm_stats = normalize_data(X_params, method=norm_method)
 
     # Normalize targets (per variable, across samples and time)
-    y_mean = np.nanmean(y, axis=(0, 1), keepdims=True)
-    y_std = np.nanstd(y, axis=(0, 1), keepdims=True)
-    y_normalized = (y - y_mean) / (y_std + 1e-8)
+    y_normalized, targets_norm_stats = normalize_data(y, method=norm_method)
 
     # Print normalization statistics
     print("\nNormalization statistics:")
-    print(f"  Forcing - mean range: [{X_forcing_mean.min():.2e}, {X_forcing_mean.max():.2e}]")
-    print(f"  Forcing - std range: [{X_forcing_std.min():.2e}, {X_forcing_std.max():.2e}]")
-    print(f"  Targets - mean range: [{y_mean.min():.2e}, {y_mean.max():.2e}]")
-    print(f"  Targets - std range: [{y_std.min():.2e}, {y_std.max():.2e}]")
+    if norm_method == 'z-score':
+        print(f"  Forcing - mean range: [{forcing_norm_stats['mean'].min():.2e}, {forcing_norm_stats['mean'].max():.2e}]")
+        print(f"  Forcing - std range: [{forcing_norm_stats['std'].min():.2e}, {forcing_norm_stats['std'].max():.2e}]")
+        print(f"  Params - mean range: [{params_norm_stats['mean'].min():.2e}, {params_norm_stats['mean'].max():.2e}]")
+        print(f"  Params - std range: [{params_norm_stats['std'].min():.2e}, {params_norm_stats['std'].max():.2e}]")
+        print(f"  Targets - mean range: [{targets_norm_stats['mean'].min():.2e}, {targets_norm_stats['mean'].max():.2e}]")
+        print(f"  Targets - std range: [{targets_norm_stats['std'].min():.2e}, {targets_norm_stats['std'].max():.2e}]")
+    elif norm_method == 'min-max':
+        print(f"  Forcing - min range: [{forcing_norm_stats['min'].min():.2e}, {forcing_norm_stats['min'].max():.2e}]")
+        print(f"  Forcing - max range: [{forcing_norm_stats['max'].min():.2e}, {forcing_norm_stats['max'].max():.2e}]")
+        print(f"  Params - min range: [{params_norm_stats['min'].min():.2e}, {params_norm_stats['min'].max():.2e}]")
+        print(f"  Params - max range: [{params_norm_stats['max'].min():.2e}, {params_norm_stats['max'].max():.2e}]")
+        print(f"  Targets - min range: [{targets_norm_stats['min'].min():.2e}, {targets_norm_stats['min'].max():.2e}]")
+        print(f"  Targets - max range: [{targets_norm_stats['max'].min():.2e}, {targets_norm_stats['max'].max():.2e}]")
 
     # Save processed data
     data_dict = {
         'X_forcing': X_forcing_normalized,
         'X_params': X_params_normalized,
         'y': y_normalized,
-        'X_forcing_mean': X_forcing_mean,
-        'X_forcing_std': X_forcing_std,
-        'X_params_mean': X_params_mean,
-        'X_params_std': X_params_std,
-        'y_mean': y_mean,
-        'y_std': y_std,
+        # Normalization statistics (new format)
+        'forcing_norm_stats': forcing_norm_stats,
+        'params_norm_stats': params_norm_stats,
+        'targets_norm_stats': targets_norm_stats,
+        'normalization_method': norm_method,
+        # Backward compatibility (for z-score only)
+        'X_forcing_mean': forcing_norm_stats.get('mean', None),
+        'X_forcing_std': forcing_norm_stats.get('std', None),
+        'X_params_mean': params_norm_stats.get('mean', None),
+        'X_params_std': params_norm_stats.get('std', None),
+        'y_mean': targets_norm_stats.get('mean', None),
+        'y_std': targets_norm_stats.get('std', None),
+        # Variable names and metadata
         'forcing_var_names': forcing_var_names,
         'target_var_names': target_var_names,
         'target_categories': target_categories,

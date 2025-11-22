@@ -273,6 +273,12 @@ OUTPUT_FILE = 'data/processed_data_forward_comprehensive.pkl'
 # These are parameters that span multiple orders of magnitude
 LOG_TRANSFORM_PARAMS = ['SATDK_CL']
 
+# Normalization method for all variables
+# Options: 'z-score' or 'min-max'
+# - 'z-score': Standardization to mean=0, std=1 (better for optimization, unbounded)
+# - 'min-max': Scale to [0, 1] range (preserves bounds, better for calibration)
+NORMALIZATION_METHOD = 'z-score'  # Default: z-score
+
 # =============================================================================
 # MODEL CONFIGURATION
 # =============================================================================
@@ -457,6 +463,7 @@ def print_config():
     print(f"  Parameter file: {PARAMETER_FILE}")
     print(f"  Simulation dir: {SIMULATION_DIR}")
     print(f"  Output file: {OUTPUT_FILE}")
+    print(f"  Normalization method: {NORMALIZATION_METHOD}")
     if LOG_TRANSFORM_PARAMS:
         print(f"  Log10-transformed parameters: {LOG_TRANSFORM_PARAMS}")
 
