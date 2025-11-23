@@ -123,9 +123,20 @@ def predict_samples(model, data_dict, sample_indices, device='cpu'):
         predictions_normalized = model(params_tensor, forcing_tensor)
         predictions_normalized = predictions_normalized.cpu().numpy()
 
-    # Denormalize
-    predictions = predictions_normalized * data_dict['y_std'] + data_dict['y_mean']
-    true_values_denorm = true_values * data_dict['y_std'] + data_dict['y_mean']
+    # Denormalize predictions using the appropriate method
+    targets_stats = data_dict['targets_norm_stats']
+    if targets_stats['method'] == 'z-score':
+        y_mean = targets_stats['mean']
+        y_std = targets_stats['std']
+        predictions = predictions_normalized * y_std + y_mean
+        true_values_denorm = true_values * y_std + y_mean
+    elif targets_stats['method'] == 'min-max':
+        y_min = targets_stats['min']
+        y_max = targets_stats['max']
+        predictions = predictions_normalized * (y_max - y_min) + y_min
+        true_values_denorm = true_values * (y_max - y_min) + y_min
+    else:
+        raise ValueError(f"Unknown normalization method: {targets_stats['method']}")
 
     return predictions, true_values_denorm
 

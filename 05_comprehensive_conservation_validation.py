@@ -85,10 +85,26 @@ def predict_from_sample_idx(model, data_dict, sample_idx, device='cpu'):
         predictions_normalized = model(params_tensor, forcing_tensor)
         predictions_normalized = predictions_normalized.cpu().numpy()[0]
 
-    # Denormalize
-    predictions = predictions_normalized * data_dict['y_std'] + data_dict['y_mean']
-    true_values_denorm = true_values * data_dict['y_std'] + data_dict['y_mean']
-    forcing_denorm = forcing * data_dict['X_forcing_std'] + data_dict['X_forcing_mean']
+    # Denormalize using the appropriate method
+    # Denormalize predictions
+    targets_stats = data_dict['targets_norm_stats']
+    if targets_stats['method'] == 'z-score':
+        predictions = predictions_normalized * targets_stats['std'] + targets_stats['mean']
+        true_values_denorm = true_values * targets_stats['std'] + targets_stats['mean']
+    elif targets_stats['method'] == 'min-max':
+        predictions = predictions_normalized * (targets_stats['max'] - targets_stats['min']) + targets_stats['min']
+        true_values_denorm = true_values * (targets_stats['max'] - targets_stats['min']) + targets_stats['min']
+    else:
+        raise ValueError(f"Unknown normalization method: {targets_stats['method']}")
+
+    # Denormalize forcing
+    forcing_stats = data_dict['forcing_norm_stats']
+    if forcing_stats['method'] == 'z-score':
+        forcing_denorm = forcing * forcing_stats['std'] + forcing_stats['mean']
+    elif forcing_stats['method'] == 'min-max':
+        forcing_denorm = forcing * (forcing_stats['max'] - forcing_stats['min']) + forcing_stats['min']
+    else:
+        raise ValueError(f"Unknown normalization method: {forcing_stats['method']}")
 
     return predictions, true_values_denorm, forcing_denorm
 

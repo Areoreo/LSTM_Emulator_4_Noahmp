@@ -181,38 +181,74 @@ def predict_with_emulator(model, params, forcing, data_dict, device='cpu'):
     Returns:
         Predictions array (n_timesteps, n_target_vars)
     """
+    # Get normalization statistics
+    params_stats = data_dict['params_norm_stats']
+    forcing_stats = data_dict['forcing_norm_stats']
+    targets_stats = data_dict['targets_norm_stats']
+
     # Convert to tensors if needed
     if isinstance(params, np.ndarray):
         params = params.reshape(1, -1)
-        params_normalized = (params - data_dict['X_params_mean']) / (data_dict['X_params_std'] + 1e-8)
+        # Normalize parameters using the appropriate method
+        if params_stats['method'] == 'z-score':
+            params_normalized = (params - params_stats['mean']) / (params_stats['std'] + 1e-8)
+        elif params_stats['method'] == 'min-max':
+            params_normalized = (params - params_stats['min']) / (params_stats['max'] - params_stats['min'] + 1e-8)
+        else:
+            raise ValueError(f"Unknown normalization method: {params_stats['method']}")
         params_tensor = torch.FloatTensor(params_normalized).to(device)
     else:
         # Already a tensor (for gradient-based optimization)
         if params.dim() == 1:
             params = params.unsqueeze(0)
-        params_mean = torch.FloatTensor(data_dict['X_params_mean']).to(device)
-        params_std = torch.FloatTensor(data_dict['X_params_std']).to(device)
-        params_tensor = (params - params_mean) / (params_std + 1e-8)
+        if params_stats['method'] == 'z-score':
+            params_mean = torch.FloatTensor(params_stats['mean']).to(device)
+            params_std = torch.FloatTensor(params_stats['std']).to(device)
+            params_tensor = (params - params_mean) / (params_std + 1e-8)
+        elif params_stats['method'] == 'min-max':
+            params_min = torch.FloatTensor(params_stats['min']).to(device)
+            params_max = torch.FloatTensor(params_stats['max']).to(device)
+            params_tensor = (params - params_min) / (params_max - params_min + 1e-8)
+        else:
+            raise ValueError(f"Unknown normalization method: {params_stats['method']}")
 
     if isinstance(forcing, np.ndarray):
         forcing = forcing.reshape(1, forcing.shape[0], forcing.shape[1])
-        forcing_normalized = (forcing - data_dict['X_forcing_mean']) / (data_dict['X_forcing_std'] + 1e-8)
+        # Normalize forcing using the appropriate method
+        if forcing_stats['method'] == 'z-score':
+            forcing_normalized = (forcing - forcing_stats['mean']) / (forcing_stats['std'] + 1e-8)
+        elif forcing_stats['method'] == 'min-max':
+            forcing_normalized = (forcing - forcing_stats['min']) / (forcing_stats['max'] - forcing_stats['min'] + 1e-8)
+        else:
+            raise ValueError(f"Unknown normalization method: {forcing_stats['method']}")
         forcing_tensor = torch.FloatTensor(forcing_normalized).to(device)
     else:
         # Already a tensor
         if forcing.dim() == 2:
             forcing = forcing.unsqueeze(0)
-        forcing_mean = torch.FloatTensor(data_dict['X_forcing_mean']).to(device)
-        forcing_std = torch.FloatTensor(data_dict['X_forcing_std']).to(device)
-        forcing_tensor = (forcing - forcing_mean) / (forcing_std + 1e-8)
+        if forcing_stats['method'] == 'z-score':
+            forcing_mean = torch.FloatTensor(forcing_stats['mean']).to(device)
+            forcing_std = torch.FloatTensor(forcing_stats['std']).to(device)
+            forcing_tensor = (forcing - forcing_mean) / (forcing_std + 1e-8)
+        elif forcing_stats['method'] == 'min-max':
+            forcing_min = torch.FloatTensor(forcing_stats['min']).to(device)
+            forcing_max = torch.FloatTensor(forcing_stats['max']).to(device)
+            forcing_tensor = (forcing - forcing_min) / (forcing_max - forcing_min + 1e-8)
+        else:
+            raise ValueError(f"Unknown normalization method: {forcing_stats['method']}")
 
     # Predict
     with torch.no_grad():
         predictions_normalized = model(params_tensor, forcing_tensor)
         predictions_normalized = predictions_normalized.cpu().numpy()
 
-    # Denormalize
-    predictions = predictions_normalized * data_dict['y_std'] + data_dict['y_mean']
+    # Denormalize predictions using the appropriate method
+    if targets_stats['method'] == 'z-score':
+        predictions = predictions_normalized * targets_stats['std'] + targets_stats['mean']
+    elif targets_stats['method'] == 'min-max':
+        predictions = predictions_normalized * (targets_stats['max'] - targets_stats['min']) + targets_stats['min']
+    else:
+        raise ValueError(f"Unknown normalization method: {targets_stats['method']}")
 
     return predictions[0]  # Remove batch dimension
 
@@ -289,6 +325,50 @@ def load_parameter_bounds(bounds_file, param_names):
     return np.array(bounds)
 
 
+def load_default_parameters(default_param_file, param_names):
+    """
+    Load default Noah-MP parameters from file
+
+    Args:
+        default_param_file: Path to default parameter file
+        param_names: List of parameter names to extract
+
+    Returns:
+        Array of default parameter values matching param_names order
+    """
+    try:
+        with open(default_param_file, 'r') as f:
+            lines = f.readlines()
+
+        # Parse parameter names and values
+        names_line = lines[0].strip().split()
+        values_line = lines[1].strip().split()
+
+        # Create dictionary mapping parameter names to values
+        default_dict = {}
+        for name, value in zip(names_line, values_line):
+            try:
+                default_dict[name] = float(value)
+            except ValueError:
+                # Handle scientific notation like 9.74E-7
+                default_dict[name] = float(value.replace('E', 'e'))
+
+        # Extract values in the order of param_names
+        default_params = []
+        for param_name in param_names:
+            if param_name in default_dict:
+                default_params.append(default_dict[param_name])
+            else:
+                # Parameter not found, will be handled by caller
+                default_params.append(None)
+
+        return np.array(default_params)
+
+    except Exception as e:
+        print(f"  Warning: Could not load default parameters from {default_param_file}: {e}")
+        return None
+
+
 def run_calibration_de(model_dir, forcing_file, obs_file, bounds_file,
                       calibrate_params=None, output_dir='calibration_results',
                       max_iterations=100, popsize=15, num_calibration=5, device='cpu'):
@@ -352,8 +432,25 @@ def run_calibration_de(model_dir, forcing_file, obs_file, bounds_file,
     bounds = load_parameter_bounds(bounds_file, param_names)
     calibrate_bounds = bounds[calibrate_indices]
 
-    # Get baseline parameters (mean from training data)
-    baseline_params = data_dict['X_params_mean'].flatten().copy()
+    # Get baseline parameters
+    # Priority: 1) Default Noah-MP params, 2) Training data mean (z-score only), 3) Midpoint of bounds
+    default_param_file = Path('data/raw/param/default_param.txt')
+    default_params = load_default_parameters(default_param_file, param_names)
+
+    params_stats = data_dict['params_norm_stats']
+
+    if default_params is not None and not np.any(default_params == None):
+        # First priority: Use scientifically validated default Noah-MP parameters
+        baseline_params = default_params
+        print(f"  Using Noah-MP default parameters as baseline")
+    elif params_stats['method'] == 'z-score' and 'mean' in params_stats:
+        # Second priority: Use mean from training data (only valid for z-score normalization)
+        baseline_params = np.array(params_stats['mean']).flatten().copy()
+        print(f"  Using training data mean as baseline (z-score normalization)")
+    else:
+        # Fallback: Use midpoint of bounds (appropriate for min-max and when mean not available)
+        baseline_params = np.array([(lower + upper) / 2 for lower, upper in bounds])
+        print(f"  Using midpoint of bounds as baseline")
 
     # Run multiple independent calibrations
     print(f"\n[5/6] Running {num_calibration} independent calibration runs...")

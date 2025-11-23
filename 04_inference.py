@@ -195,9 +195,24 @@ def predict(model, params, forcing, data_dict, device='cpu'):
     if forcing.ndim == 2:
         forcing = forcing.reshape(1, forcing.shape[0], forcing.shape[1])
 
-    # Normalize inputs
-    params_normalized = (params - data_dict['X_params_mean']) / (data_dict['X_params_std'] + 1e-8)
-    forcing_normalized = (forcing - data_dict['X_forcing_mean']) / (data_dict['X_forcing_std'] + 1e-8)
+    # Normalize inputs using the appropriate method
+    # Normalize parameters
+    params_stats = data_dict['params_norm_stats']
+    if params_stats['method'] == 'z-score':
+        params_normalized = (params - params_stats['mean']) / (params_stats['std'] + 1e-8)
+    elif params_stats['method'] == 'min-max':
+        params_normalized = (params - params_stats['min']) / (params_stats['max'] - params_stats['min'] + 1e-8)
+    else:
+        raise ValueError(f"Unknown normalization method: {params_stats['method']}")
+
+    # Normalize forcing
+    forcing_stats = data_dict['forcing_norm_stats']
+    if forcing_stats['method'] == 'z-score':
+        forcing_normalized = (forcing - forcing_stats['mean']) / (forcing_stats['std'] + 1e-8)
+    elif forcing_stats['method'] == 'min-max':
+        forcing_normalized = (forcing - forcing_stats['min']) / (forcing_stats['max'] - forcing_stats['min'] + 1e-8)
+    else:
+        raise ValueError(f"Unknown normalization method: {forcing_stats['method']}")
 
     # Convert to tensors
     params_tensor = torch.FloatTensor(params_normalized).to(device)
@@ -208,8 +223,14 @@ def predict(model, params, forcing, data_dict, device='cpu'):
         predictions_normalized = model(params_tensor, forcing_tensor)
         predictions_normalized = predictions_normalized.cpu().numpy()
 
-    # Denormalize
-    predictions = predictions_normalized * data_dict['y_std'] + data_dict['y_mean']
+    # Denormalize predictions using the appropriate method
+    targets_stats = data_dict['targets_norm_stats']
+    if targets_stats['method'] == 'z-score':
+        predictions = predictions_normalized * targets_stats['std'] + targets_stats['mean']
+    elif targets_stats['method'] == 'min-max':
+        predictions = predictions_normalized * (targets_stats['max'] - targets_stats['min']) + targets_stats['min']
+    else:
+        raise ValueError(f"Unknown normalization method: {targets_stats['method']}")
 
     return predictions
 
