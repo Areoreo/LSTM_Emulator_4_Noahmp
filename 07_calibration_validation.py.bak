@@ -1,0 +1,407 @@
+#!/usr/bin/env python3
+"""
+Calibration Validation Script
+Compares Noah-MP model outputs with different parameter sets:
+1. Emulator-calibrated parameters
+2. Expert-calibrated parameters
+3. Default parameters
+against real observations
+
+Updated: Uses publication-quality plotting settings
+"""
+
+import os
+import argparse
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+from datetime import datetime
+
+# Import publication plotting settings
+try:
+    import plot_settings
+    plot_settings.setup_publication_style()
+    HAS_PLOT_SETTINGS = True
+except ImportError:
+    HAS_PLOT_SETTINGS = False
+    try:
+        plt.style.use('seaborn-v0_8-whitegrid')
+    except:
+        plt.style.use('ggplot')
+
+import config_forward_comprehensive as config
+
+
+def parse_noahmp_output(output_file):
+    """Parse Noah-MP output CSV file and return DataFrame"""
+    try:
+        df = pd.read_csv(output_file)
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+        elif 'date' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['date'])
+        return df
+    except Exception as e:
+        print(f"Error reading {output_file}: {e}")
+        return None
+
+
+def read_observation_data(obs_file, time_range=None):
+    """
+    Read observation data from CSV file
+    
+    Args:
+        obs_file: Path to observation CSV
+        time_range: Optional dict with 'start' and 'end' dates
+    """
+    obs_df = pd.read_csv(obs_file)
+    
+    if 'timestamp' in obs_df.columns:
+        obs_df['timestamp'] = pd.to_datetime(obs_df['timestamp'])
+    elif 'date' in obs_df.columns:
+        obs_df['timestamp'] = pd.to_datetime(obs_df['date'])
+    
+    # Apply time range filter
+    if time_range is not None:
+        start_date = pd.to_datetime(time_range['start'])
+        end_date = pd.to_datetime(time_range['end'])
+        obs_df = obs_df[
+            (obs_df['timestamp'] >= start_date) & 
+            (obs_df['timestamp'] <= end_date)
+        ].reset_index(drop=True)
+    
+    return obs_df
+
+
+def calculate_metrics(obs, sim):
+    """Calculate performance metrics between observations and simulations"""
+    mask = ~(np.isnan(obs) | np.isnan(sim))
+    obs_clean = obs[mask]
+    sim_clean = sim[mask]
+    
+    if len(obs_clean) == 0:
+        return {'BIAS': np.nan, 'MAE': np.nan, 'RMSE': np.nan, 
+                'PBIAS': np.nan, 'R2': np.nan, 'N': 0}
+    
+    bias = np.mean(sim_clean - obs_clean)
+    mae = np.mean(np.abs(sim_clean - obs_clean))
+    rmse = np.sqrt(np.mean((sim_clean - obs_clean)**2))
+    
+    obs_mean = np.mean(obs_clean)
+    if abs(obs_mean) > 1e-10:
+        pbias = 100 * np.sum(sim_clean - obs_clean) / np.sum(obs_clean)
+    else:
+        pbias = np.nan
+    
+    ss_res = np.sum((obs_clean - sim_clean)**2)
+    ss_tot = np.sum((obs_clean - obs_mean)**2)
+    if ss_tot > 1e-10:
+        r2 = 1 - (ss_res / ss_tot)
+    else:
+        r2 = np.nan
+    
+    return {'BIAS': bias, 'MAE': mae, 'RMSE': rmse, 
+            'PBIAS': pbias, 'R2': r2, 'N': len(obs_clean)}
+
+
+def plot_timeseries_comparison(obs_df, sim_dfs, variable, output_file, 
+                               labels=None, time_range=None):
+    """
+    Plot time series comparison with publication-quality settings
+    
+    Args:
+        obs_df: Observation DataFrame
+        sim_dfs: Dict of simulation DataFrames {name: df}
+        variable: Variable name to plot
+        output_file: Output file path
+        labels: Optional labels for simulations
+        time_range: Optional time range for title
+    """
+    if HAS_PLOT_SETTINGS:
+        fig, ax = plot_settings.create_figure('wide')
+        colors = plot_settings.COLOR_PALETTE
+        lw = plot_settings.LINE_WIDTHS
+    else:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        colors = ['#0077BB', '#EE7733', '#009988', '#CC3311']
+        lw = {'data': 1.5, 'reference': 1.0}
+    
+    # Plot observations
+    ax.plot(obs_df['timestamp'], obs_df[variable], 
+            color='black', linewidth=lw['data'],
+            label='Observed', linestyle='-', marker='o', markersize=2)
+    
+    # Plot simulations
+    for i, (name, sim_df) in enumerate(sim_dfs.items()):
+        if variable in sim_df.columns:
+            label = labels[name] if labels and name in labels else name
+            ax.plot(sim_df['timestamp'], sim_df[variable],
+                   color=colors[i % len(colors)], linewidth=lw['data'],
+                   label=label, linestyle='--', alpha=0.8)
+    
+    ax.set_xlabel('Date')
+    ax.set_ylabel(variable)
+    
+    title = f'{variable} - Model Comparison'
+    if time_range:
+        title += f" ({time_range['start']} to {time_range['end']})"
+    ax.set_title(title)
+    
+    ax.legend(loc='best')
+    
+    plt.tight_layout()
+    
+    if HAS_PLOT_SETTINGS:
+        plot_settings.save_figure(fig, output_file, formats=['png', 'pdf'])
+    else:
+        fig.savefig(f"{output_file}.png", dpi=300, bbox_inches='tight')
+    
+    plt.close()
+
+
+def plot_scatter_comparison(obs_df, sim_df, variable, output_file, 
+                           sim_label='Simulated'):
+    """Plot scatter comparison with 1:1 line"""
+    if HAS_PLOT_SETTINGS:
+        fig, ax = plot_settings.create_figure('square')
+    else:
+        fig, ax = plt.subplots(figsize=(6, 6))
+    
+    obs_values = obs_df[variable].values
+    sim_values = sim_df[variable].values
+    
+    # Remove NaN
+    mask = ~(np.isnan(obs_values) | np.isnan(sim_values))
+    obs_clean = obs_values[mask]
+    sim_clean = sim_values[mask]
+    
+    if len(obs_clean) == 0:
+        plt.close()
+        return
+    
+    # Scatter plot
+    ax.scatter(obs_clean, sim_clean, alpha=0.5, s=20, edgecolors='none')
+    
+    # 1:1 line
+    lims = [
+        min(np.min(obs_clean), np.min(sim_clean)),
+        max(np.max(obs_clean), np.max(sim_clean))
+    ]
+    margin = (lims[1] - lims[0]) * 0.05
+    lims = [lims[0] - margin, lims[1] + margin]
+    ax.plot(lims, lims, 'k--', linewidth=1, label='1:1 line')
+    ax.set_xlim(lims)
+    ax.set_ylim(lims)
+    
+    # Metrics
+    metrics = calculate_metrics(obs_clean, sim_clean)
+    stats_text = f"R\u00b2 = {metrics['R2']:.3f}\nRMSE = {metrics['RMSE']:.3f}\nBias = {metrics['BIAS']:.3f}"
+    ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, fontsize=9, va='top',
+           bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    ax.set_xlabel(f'Observed {variable}')
+    ax.set_ylabel(f'{sim_label} {variable}')
+    ax.set_title(f'{variable} - Scatter Comparison')
+    ax.set_aspect('equal')
+    
+    plt.tight_layout()
+    
+    if HAS_PLOT_SETTINGS:
+        plot_settings.save_figure(fig, output_file, formats=['png', 'pdf'])
+    else:
+        fig.savefig(f"{output_file}.png", dpi=300, bbox_inches='tight')
+    
+    plt.close()
+
+
+def plot_metrics_comparison(metrics_df, output_file, metric_name='RMSE'):
+    """Plot bar chart comparing metrics across parameter sets"""
+    if HAS_PLOT_SETTINGS:
+        fig, ax = plot_settings.create_figure('wide')
+        colors = plot_settings.COLOR_PALETTE
+    else:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        colors = ['#0077BB', '#EE7733', '#009988']
+    
+    param_sets = metrics_df['param_set'].unique()
+    variables = metrics_df['variable'].unique()
+    
+    x = np.arange(len(variables))
+    width = 0.25
+    
+    for i, param_set in enumerate(param_sets):
+        subset = metrics_df[metrics_df['param_set'] == param_set]
+        values = [subset[subset['variable'] == v][metric_name].values[0] 
+                 for v in variables]
+        ax.bar(x + i * width, values, width, label=param_set, color=colors[i % len(colors)])
+    
+    ax.set_xlabel('Variable')
+    ax.set_ylabel(metric_name)
+    ax.set_title(f'{metric_name} Comparison Across Parameter Sets')
+    ax.set_xticks(x + width)
+    ax.set_xticklabels(variables)
+    ax.legend()
+    
+    plt.tight_layout()
+    
+    if HAS_PLOT_SETTINGS:
+        plot_settings.save_figure(fig, output_file, formats=['png', 'pdf'])
+    else:
+        fig.savefig(f"{output_file}.png", dpi=300, bbox_inches='tight')
+    
+    plt.close()
+
+
+def run_validation(calibration_dir, obs_file, output_dir, variables=None,
+                  time_range=None, run_full_validation=True):
+    """
+    Run full validation workflow
+    
+    Args:
+        calibration_dir: Directory with calibration results
+        obs_file: Observation file path
+        output_dir: Output directory for results
+        variables: List of variables to validate
+        time_range: Dict with 'start' and 'end' dates
+        run_full_validation: Whether to run full time range validation
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    if variables is None:
+        variables = ['SOIL_M', 'LH', 'HFX']
+    
+    print(f"\nValidation Configuration:")
+    print(f"  Calibration dir: {calibration_dir}")
+    print(f"  Observation file: {obs_file}")
+    print(f"  Variables: {variables}")
+    if time_range:
+        print(f"  Time range: {time_range['start']} to {time_range['end']}")
+    
+    # Load observation data
+    obs_df = read_observation_data(obs_file, time_range)
+    print(f"  Loaded {len(obs_df)} observation records")
+    
+    # Find simulation outputs
+    sim_files = {
+        'emulator': Path(calibration_dir) / 'noahmp_output_calibrated.csv',
+        'expert': Path(calibration_dir) / 'noahmp_output_expert.csv',
+        'default': Path(calibration_dir) / 'noahmp_output_default.csv',
+    }
+    
+    sim_dfs = {}
+    for name, filepath in sim_files.items():
+        if filepath.exists():
+            df = parse_noahmp_output(filepath)
+            if df is not None:
+                sim_dfs[name] = df
+                print(f"  Loaded {name} simulation: {len(df)} records")
+    
+    if not sim_dfs:
+        print("No simulation outputs found!")
+        return None
+    
+    # Calculate metrics
+    all_metrics = []
+    for var in variables:
+        if var not in obs_df.columns:
+            print(f"  Warning: {var} not in observations")
+            continue
+        
+        for param_set, sim_df in sim_dfs.items():
+            if var in sim_df.columns:
+                metrics = calculate_metrics(
+                    obs_df[var].values,
+                    sim_df[var].values
+                )
+                metrics['variable'] = var
+                metrics['param_set'] = param_set
+                all_metrics.append(metrics)
+    
+    metrics_df = pd.DataFrame(all_metrics)
+    metrics_df.to_csv(output_dir / 'validation_metrics.csv', index=False)
+    print(f"\nMetrics saved to: {output_dir / 'validation_metrics.csv'}")
+    
+    # Print summary
+    print("\nValidation Metrics Summary:")
+    print(metrics_df.to_string())
+    
+    # Generate plots
+    print("\nGenerating plots...")
+    
+    labels = {
+        'emulator': 'Emulator-calibrated',
+        'expert': 'Expert-calibrated', 
+        'default': 'Default parameters'
+    }
+    
+    for var in variables:
+        if var in obs_df.columns:
+            # Time series
+            plot_timeseries_comparison(
+                obs_df, sim_dfs, var,
+                str(output_dir / f'timeseries_{var}'),
+                labels=labels, time_range=time_range
+            )
+            
+            # Scatter plots
+            for param_set, sim_df in sim_dfs.items():
+                if var in sim_df.columns:
+                    plot_scatter_comparison(
+                        obs_df, sim_df, var,
+                        str(output_dir / f'scatter_{var}_{param_set}'),
+                        sim_label=labels.get(param_set, param_set)
+                    )
+    
+    # Metrics comparison bar chart
+    if len(metrics_df) > 0:
+        for metric in ['RMSE', 'R2', 'PBIAS']:
+            plot_metrics_comparison(
+                metrics_df,
+                str(output_dir / f'metrics_{metric}'),
+                metric_name=metric
+            )
+    
+    print(f"Plots saved to: {output_dir}")
+    
+    return metrics_df
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Validate calibration results against observations'
+    )
+    parser.add_argument('calibration_dir', type=str,
+                       help='Directory with calibration results')
+    parser.add_argument('--obs_file', type=str,
+                       default='data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv',
+                       help='Observation file path')
+    parser.add_argument('--output_dir', type=str, default=None,
+                       help='Output directory')
+    parser.add_argument('--variables', type=str, nargs='+',
+                       default=['SOIL_M', 'LH', 'HFX'],
+                       help='Variables to validate')
+    parser.add_argument('--full_range', action='store_true',
+                       help='Use full time range (201507-201707)')
+    
+    args = parser.parse_args()
+    
+    if args.output_dir is None:
+        args.output_dir = f'validation_results/{Path(args.calibration_dir).name}'
+    
+    time_range = None
+    if args.full_range:
+        time_range = config.TIME_RANGE_FULL
+    
+    run_validation(
+        calibration_dir=args.calibration_dir,
+        obs_file=args.obs_file,
+        output_dir=args.output_dir,
+        variables=args.variables,
+        time_range=time_range
+    )
+
+
+if __name__ == '__main__':
+    main()

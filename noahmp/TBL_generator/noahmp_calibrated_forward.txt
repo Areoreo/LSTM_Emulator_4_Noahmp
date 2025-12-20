@@ -1,0 +1,18 @@
+VCMX25_EBF    HVT_EBF    HVB_EBF    CWPVT_EBF    Z0MVT_EBF    WLTSMC_CL    REFSMC_CL    MAXSMC_CL    SATDK_CL
+100.00    45.000    25.00    0.670    0.800    0.138    0.412    0.525    1.00E-06
+99.860    22.685    5.925    0.314    0.800    0.118    0.285    0.582    0.000241
+92.055    21.753    0.659    4.781    0.002    0.029    0.157    0.562    1.10E-05
+92.055    21.753    0.659    0.670    0.002    0.029    0.157    0.562    1.10E-05
+92.055    21.753    0.659    4.781    0.800    0.029    0.157    0.562    1.10E-05    
+
+
+
+
+
+
+#Some notes:
+# 1: artificial calibration by ycheng
+# 2: LSTM, backward, 200 samples, dim-512_layer-2
+# 3: Attention-LSTM, forward, 400 smaples, 
+# 4: Attention-LSTM, forward, 400 smaples, change CWPVT_EBF to 0.670
+# 5: Attention-LSTM, forward, 400 smaples, change Z0MVT_EBF to 0.800

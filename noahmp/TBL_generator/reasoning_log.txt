@@ -1,0 +1,25 @@
+我想要把参数文件NoahmpTable.TBL中的对应参数替换为noahmp_1000samples中对应的参数。samples文件实际上可以看作一个用' '作为分隔符的csv文件。
+
+table的参数的储存方式如，变量被赋予的，按','分割的，第n个值，即为第n个type的该变量的值。
+
+如ALBSAT_VIS = 0.15, 0.11, 0.10, 0.09, 0.08, 0.07, 0.06, 0.05； 则type1的ALBSAT_VIS为0.15, type2的ALBSAT_VIS为0.11，以此类推。
+
+首先，请建立一个samples列名到type和参数名称的映射。samples中的列名：
+
+ALBSAT_VIS VCMX25_EBF HVT_EBF CWPVT_EBF Z0MVT_EBF VCMX25_CP HVT_CP CWPVT_CP Z0MVT_CP VCMX25_SAV HVT_SAV CWPVT_SAV Z0MVT_SAV WLTSMC_CL REFSMC_CL MAXSMC_CL SATDK_CL WLTSMC_loam REFSMC_loam MAXSMC_loam SATDK_loam WLTSMC_SCL REFSMC_SCL MAXSMC_SCL SATDK_SCL ALBSAT_NIR ALBDRY_VIS ALBDRY_NIR
+
+其中共涉及到了三个部分，分别为&noahmp_rad_parameters, &noahmp_usgs_parameters, &noahmp_soil_stas_parameters。每一个部分都有自己的一套type含义和参数列表。如对于&noahmp_usgs_parameters，type=1的意思为land use type为urban；对于&noahmp_soil_stas_parameters，type=5的意思为soil type为SILT。
+
+对于&noahmp_rad_parameters，只修改soil color = 4的参数值，因此type固定=4。这一部分涉及的变量有4个，为ALBSAT_VIS, ALBSAT_NIR, ALBSAT_NIR, ALBDRY_NIR。
+
+对于&noahmp_usgs_parameters，最后一个'_'之后为type的缩写，之前为变量名。具体对应的缩写名-全名-type编号表：{EBF, Evergreen Broadleaf Forest, 13; CP, Dryland Cropland and Pasture, 2; SAV, Savanna, 10}
+
+对于&noahmp_soil_stas_parameters，最后一个'_'之后为type的缩写，之前为变量名。具体对应的缩写名-全名-type编号表：{CL, CLAY LOAM, 9; loam, LOAM, 6; SCL, SANDY CLAY LOAM, 7}
+
+请根据列名，识别其（1）变量位置，如&noahmp_rad_parameters；（2）变量名，如ALBSAT_VIS；（3）type编号，如4。只要对每一个变量，知晓了以上三个信息，就可以唯一定位其在table文件中的位置，并根据samples文件替换该值。生成一个与列名向量顺序对应的变量信息矩阵。
+
+然后，对samples文件的每一行都进行如下操作，对第i行：
+
+根据变量信息矩阵，对所有变量做如下处理：对第j个变量，确定定位范围从{变量位置}起始，到下一个模块的起始点(即‘&’)结束，对此范围内，根据{变量名}确定变量赋值行，替换按','分割的第{type}个值为samples文件中第i行，第j列的值。保存该table文件到'NoahmpTable_4emu_{i}/NoahmpTable.TBL'。
+
+最后，理论上应生成1000个更新过的table文件。可以使其可调节，对于我们的测试，可以先生成前10行。

@@ -6,7 +6,49 @@ COMPREHENSIVE FORWARD Problem:
 - Input: Parameters (9 NoahMP params) + Forcing variables (time series)
 - Output: All energy/water cycle variables for conservation validation
 - Goal: Validate model follows physical conservation laws
+
+Updated: 
+- Support all 8 forcing variables from original LDASIN files
+- Allow choosing between 30-min and daily temporal resolution for LSTM
 """
+
+# =============================================================================
+# TEMPORAL RESOLUTION CONFIGURATION
+# =============================================================================
+
+# Options: '30min' or 'daily'
+# '30min': Use original 30-minute resolution (more data, longer training)
+# 'daily': Aggregate to daily resolution (less data, faster training)
+TEMPORAL_RESOLUTION = 'daily'  # Default to daily for efficiency
+
+# Time step in seconds (automatically set based on TEMPORAL_RESOLUTION)
+def get_timestep_seconds():
+    if TEMPORAL_RESOLUTION == '30min':
+        return 1800  # 30 minutes
+    else:
+        return 86400  # 1 day
+
+# =============================================================================
+# TIME CONFIGURATION
+# =============================================================================
+
+# Full data time range
+TIME_RANGE_FULL = {
+    'start': '2015-07-30',
+    'end': '2017-07-30'
+}
+
+# Calibration time range (first year)
+TIME_RANGE_CALIBRATION = {
+    'start': '2015-07-30',
+    'end': '2016-07-29'
+}
+
+# Validation time range (second year) 
+TIME_RANGE_VALIDATION = {
+    'start': '2016-07-30',
+    'end': '2017-07-30'
+}
 
 # =============================================================================
 # COMPREHENSIVE TARGET VARIABLES CONFIGURATION
@@ -125,20 +167,20 @@ WATER_FLUX_TARGETS = [
         'category': 'water_fluxes'
     },
     {
-        'name': 'UGDRNOFF',  # Variable in NetCDF (accumulated)
-        'output_name': 'UGDRNOFF_RATE',  # After conversion to rate
-        'aggregation': 'last',  # Take last accumulated value of the day
+        'name': 'UGDRNOFF',
+        'output_name': 'UGDRNOFF_RATE',
+        'aggregation': 'last',
         'description': 'Underground runoff rate (mm/day)',
         'category': 'water_fluxes',
-        'convert_accumulated_to_rate': True  # Flag for preprocessing
+        'convert_accumulated_to_rate': True
     },
     {
-        'name': 'SFCRNOFF',  # Variable in NetCDF (accumulated)
-        'output_name': 'SFCRNOFF_RATE',  # After conversion to rate
-        'aggregation': 'last',  # Take last accumulated value of the day
+        'name': 'SFCRNOFF',
+        'output_name': 'SFCRNOFF_RATE',
+        'aggregation': 'last',
         'description': 'Surface runoff rate (mm/day)',
         'category': 'water_fluxes',
-        'convert_accumulated_to_rate': True  # Flag for preprocessing
+        'convert_accumulated_to_rate': True
     },
 ]
 
@@ -230,29 +272,66 @@ TARGET_VARIABLES = (
 )
 
 # =============================================================================
-# FORCING VARIABLES CONFIGURATION (Time series inputs)
+# FORCING VARIABLES CONFIGURATION (All 8 variables from LDASIN files)
 # =============================================================================
 
+# All 8 forcing variables from original LDASIN files
 FORCING_VARIABLES = [
     {
-        'name': 'LWFORC',
+        'name': 'T2D',
+        'source_name': 'T2D',
+        'noahmp_name': 'T2MV',
         'aggregation': 'mean',
-        'description': 'Longwave forcing (W/m2)'
+        'description': '2m air temperature (K)'
     },
     {
-        'name': 'SWFORC',
+        'name': 'Q2D',
+        'source_name': 'Q2D',
+        'noahmp_name': 'Q2D',
         'aggregation': 'mean',
-        'description': 'Shortwave forcing (W/m2)'
+        'description': '2m specific humidity (kg/kg)'
+    },
+    {
+        'name': 'PSFC',
+        'source_name': 'PSFC',
+        'noahmp_name': 'PSFC',
+        'aggregation': 'mean',
+        'description': 'Surface pressure (Pa)'
+    },
+    {
+        'name': 'U2D',
+        'source_name': 'U2D',
+        'noahmp_name': 'U2D',
+        'aggregation': 'mean',
+        'description': '2m U-wind component (m/s)'
+    },
+    {
+        'name': 'V2D',
+        'source_name': 'V2D',
+        'noahmp_name': 'V2D',
+        'aggregation': 'mean',
+        'description': '2m V-wind component (m/s)'
+    },
+    {
+        'name': 'LWDOWN',
+        'source_name': 'LWDOWN',
+        'noahmp_name': 'LWFORC',
+        'aggregation': 'mean',
+        'description': 'Downward longwave radiation (W/m2)'
+    },
+    {
+        'name': 'SWDOWN',
+        'source_name': 'SWDOWN',
+        'noahmp_name': 'SWFORC',
+        'aggregation': 'mean',
+        'description': 'Downward shortwave radiation (W/m2)'
     },
     {
         'name': 'RAINRATE',
+        'source_name': 'RAINRATE',
+        'noahmp_name': 'RAINRATE',
         'aggregation': 'sum',
-        'description': 'Total daily precipitation (mm/day)'
-    },
-    {
-        'name': 'T2MV',
-        'aggregation': 'mean',
-        'description': 'Temperature at 2m (K)'
+        'description': 'Precipitation rate (mm/s raw, mm/day when daily)'
     },
 ]
 
@@ -264,31 +343,41 @@ ADD_MONTH_FEATURE = False  # Add month as one-hot encoding
 # DATA PREPROCESSING CONFIGURATION
 # =============================================================================
 
-MAX_SAMPLES = 10
+MAX_SAMPLES = 1000
 PARAMETER_FILE = 'data/raw/param/noahmp_param_sets.txt'
 SIMULATION_DIR = 'data/raw/sim_results'
+
+# Forcing file paths (both resolutions available)
+FORCING_FILE_30MIN = 'data/raw/forcing/forcing_panama_30min.nc'
+FORCING_FILE_DAILY = 'data/raw/forcing/forcing_panama_daily.nc'
+
+def get_forcing_file():
+    """Get forcing file path based on temporal resolution setting"""
+    if TEMPORAL_RESOLUTION == '30min':
+        return FORCING_FILE_30MIN
+    else:
+        return FORCING_FILE_DAILY
+
+FORCING_FILE = get_forcing_file()  # For backward compatibility
+
 OUTPUT_FILE = 'data/processed_data_forward_comprehensive.pkl'
 
 # Parameters that should be log10-transformed before normalization
-# These are parameters that span multiple orders of magnitude
-LOG_TRANSFORM_PARAMS = ['SATDK_CL']
+LOG_TRANSFORM_PARAMS = ['SATDK_CL']  # Apply log10 transform during preprocessing
 
-# Normalization method for all variables
-# Options: 'z-score' or 'min-max'
-# - 'z-score': Standardization to mean=0, std=1 (better for optimization, unbounded)
-# - 'min-max': Scale to [0, 1] range (preserves bounds, better for calibration)
-NORMALIZATION_METHOD = 'min-max'  # Default: z-score
+# Normalization method
+NORMALIZATION_METHOD = 'min-max'
 
 # =============================================================================
 # MODEL CONFIGURATION
 # =============================================================================
 
 MODEL_CONFIG = {
-    'model_type': 'AttentionLSTM',  # Options: 'LSTM', 'BiLSTM', 'AttentionLSTM'
-    'hidden_dim': 512,  # Increased for more outputs
-    'num_layers': 2,     # Increased for complexity
+    'model_type': 'AttentionLSTM',
+    'hidden_dim': 1536,
+    'num_layers': 4,
     'dropout': 0.3,
-    'param_embedding_dim': 128,  # Increased for richer parameter representation
+    'param_embedding_dim': 64,
 }
 
 # =============================================================================
@@ -296,10 +385,10 @@ MODEL_CONFIG = {
 # =============================================================================
 
 TRAINING_CONFIG = {
-    'learning_rate': 0.0005,  # Lower for stability
-    'batch_size': 8,          # Smaller due to more outputs
-    'num_epochs': 100,
-    'patience': 10,
+    'learning_rate': 0.0005,
+    'batch_size': 32,
+    'num_epochs': 500,
+    'patience': 50,
     'train_ratio': 0.8,
 }
 
@@ -307,66 +396,27 @@ TRAINING_CONFIG = {
 # OUTPUT LOSS WEIGHTS CONFIGURATION
 # =============================================================================
 
-# Weight different variable categories differently
-# Higher weight = model focuses more on that variable
-
 OUTPUT_WEIGHTS = {
-    # Energy balance variables (most critical for conservation)
-    'FSA': 2.0,
-    'FIRA': 2.0,
-    'HFX': 2.0,
-    'LH': 2.0,
-    'GRDFLX': 2.0,
-
-    # Energy components (important for detailed budget)
-    'SAV': 1.5,
-    'SAG': 1.5,
-    'IRC': 1.5,
-    'SHC': 1.5,
-    'EVC': 1.5,
-    'IRG': 1.5,
-    'SHG': 1.5,
-    'EVG': 1.5,
-    'GHV': 1.5,
-
-    # Water fluxes (critical for water balance)
-    'ECAN': 2.0,
-    'ETRAN': 2.0,
-    'EDIR': 2.0,
-    'UGDRNOFF_RATE': 2.0,  # Increased weight for runoff rates (critical for water conservation)
-    'SFCRNOFF_RATE': 2.0,  # Increased weight for runoff rates (critical for water conservation)
-
-    # Water storage (important for state)
-    'SOIL_M': 2.0,
-    'SOIL_M_L2': 1.5,
-    'SOIL_M_L3': 1.5,
-    'SOIL_M_L4': 1.5,
+    # Energy balance variables (most critical)
+    'FSA': 1.0, 'FIRA': 1.0, 'HFX': 2.0, 'LH': 2.0, 'GRDFLX': 1.0,
+    # Energy components
+    'SAV': 1.5, 'SAG': 1.5, 'IRC': 1.5, 'SHC': 1.5, 'EVC': 1.5,
+    'IRG': 1.5, 'SHG': 1.5, 'EVG': 1.5, 'GHV': 1.5,
+    # Water fluxes
+    'ECAN': 2.0, 'ETRAN': 2.0, 'EDIR': 2.0,
+    'UGDRNOFF_RATE': 2.0, 'SFCRNOFF_RATE': 2.0,
+    # Water storage
+    'SOIL_M': 2.0, 'SOIL_M_L2': 1.5, 'SOIL_M_L3': 1.5, 'SOIL_M_L4': 1.5,
     'CANLIQ': 1.0,
-
-    # Temperature (important for coupling)
-    'SOIL_T': 1.5,
-    'SOIL_T_L2': 1.0,
-    'TG': 1.5,
-    'TV': 1.5,
-    'TRAD': 1.5,
+    # Temperature
+    'SOIL_T': 1.5, 'SOIL_T_L2': 1.0, 'TG': 1.5, 'TV': 1.5, 'TRAD': 1.5,
 }
 
 def get_output_weights(variable_names):
-    """
-    Get output weights based on variable names
-
-    Args:
-        variable_names: List of variable names
-
-    Returns:
-        numpy array of weights (one per variable)
-    """
     import numpy as np
-
     if OUTPUT_WEIGHTS is not None:
         weights = np.array([OUTPUT_WEIGHTS.get(name, 1.0) for name in variable_names])
         return weights
-
     return np.ones(len(variable_names))
 
 # =============================================================================
@@ -390,7 +440,7 @@ def get_forcing_variable_names():
     return names
 
 def get_target_variable_names():
-    """Get list of target variable names (with layer/output name handling)"""
+    """Get list of target variable names"""
     names = []
     for var in TARGET_VARIABLES:
         if 'output_name' in var:
@@ -401,10 +451,7 @@ def get_target_variable_names():
 
 def get_target_variable_categories():
     """Get category for each target variable"""
-    categories = []
-    for var in TARGET_VARIABLES:
-        categories.append(var['category'])
-    return categories
+    return [var['category'] for var in TARGET_VARIABLES]
 
 def get_num_forcing_variables():
     """Get total number of forcing variables"""
@@ -429,7 +476,9 @@ def print_config():
     print("COMPREHENSIVE FORWARD MODEL CONFIGURATION")
     print("="*80)
 
-    # Group by category
+    print(f"\nTemporal Resolution: {TEMPORAL_RESOLUTION}")
+    print(f"Timestep: {get_timestep_seconds()} seconds")
+
     categories = {
         'energy_balance': 'Energy Balance (Core)',
         'energy_components': 'Energy Components (Detailed)',
@@ -458,10 +507,16 @@ def print_config():
     print(f"\nTotal forcing features: {get_num_forcing_variables()}")
     print(f"Total target features: {get_num_target_variables()}")
 
+    print(f"\nTime Configuration:")
+    print(f"  Full range: {TIME_RANGE_FULL['start']} to {TIME_RANGE_FULL['end']}")
+    print(f"  Calibration: {TIME_RANGE_CALIBRATION['start']} to {TIME_RANGE_CALIBRATION['end']}")
+    print(f"  Validation: {TIME_RANGE_VALIDATION['start']} to {TIME_RANGE_VALIDATION['end']}")
+
     print(f"\nData Configuration:")
     print(f"  Max samples: {MAX_SAMPLES}")
     print(f"  Parameter file: {PARAMETER_FILE}")
     print(f"  Simulation dir: {SIMULATION_DIR}")
+    print(f"  Forcing file: {get_forcing_file()}")
     print(f"  Output file: {OUTPUT_FILE}")
     print(f"  Normalization method: {NORMALIZATION_METHOD}")
     if LOG_TRANSFORM_PARAMS:
@@ -474,12 +529,6 @@ def print_config():
     print(f"\nTraining Configuration:")
     for key, value in TRAINING_CONFIG.items():
         print(f"  {key}: {value}")
-
-    print(f"\nConservation Checking:")
-    print(f"  Energy balance variables: {len(ENERGY_BALANCE_TARGETS)}")
-    print(f"  Energy component variables: {len(ENERGY_COMPONENT_TARGETS)}")
-    print(f"  Water flux variables: {len(WATER_FLUX_TARGETS)}")
-    print(f"  Water storage variables: {len(WATER_STORAGE_TARGETS)}")
 
     print("="*80)
 

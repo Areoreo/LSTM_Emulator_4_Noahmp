@@ -1,524 +1,275 @@
-# LSTM Emulator for Noah-MP Land Surface Model
+# LSTM Emulator for Noah-MP Calibration
 
-Deep learning emulator for the Noah-MP land surface model using LSTM networks to predict energy and water cycle variables from model parameters and meteorological forcing.
+基于LSTM神经网络的Noah-MP陆面模型快速参数校准系统。
 
-## Overview
-
-This project provides a comprehensive LSTM-based emulator that:
-- Predicts **29 energy and water cycle variables** from Noah-MP simulations
-- Enables **fast parameter sensitivity analysis** and uncertainty quantification
-- Maintains **physical conservation** of energy and water budgets
-- Supports multiple LSTM architectures (LSTM, BiLSTM, Attention-LSTM)
-
-### Key Features
-
-- **Comprehensive Output**: 29 variables covering energy balance, water fluxes, storage, and temperature
-- **Physical Consistency**: Full energy and water conservation validation
-- **Multiple Architectures**: Choose from LSTM, BiLSTM, or Attention-LSTM models
-- **Flexible Training**: Configurable loss weights to prioritize critical variables
-- **Automated Validation**: Built-in metrics computation and visualization
-- **Production Ready**: Standardized inference interface for real-world applications
-
-## Project Structure
+## 工作流概览
 
 ```
-LSTM_Emulator_4_Noahmp/
-├── config_forward_comprehensive.py          # Model and training configuration
-├── lstm_model_forward.py                    # LSTM model architectures
-│
-├── Data Processing:
-│   └── 01_data_preprocessing_forward_comprehensive.py
-│
-├── Training & Validation:
-│   ├── 02_train_forward_comprehensive.py    # Training with integrated validation
-│   └── 03_validation.py                     # Time series validation for test samples
-│
-├── Inference & Analysis:
-│   ├── 04_inference.py                      # Production inference script
-│   ├── 05_comprehensive_conservation_validation.py
-│   └── 06_calibration_applying_emulator.py  # Parameter calibration with ensemble
-│
-├── Utilities:
-│   ├── conservation_check_comprehensive.py  # Conservation validation
-│   └── test_comprehensive_model.py          # Model testing
-│
-└── Data:
-    ├── raw/param/noahmp_param_sets.txt     # 9 Noah-MP parameters
-    ├── raw/sim_results/                     # Simulation outputs
-    └── processed_data_forward_comprehensive.pkl
+┌─────────────────────────────────────────────────────────────────────┐
+│                     run_model_training.sh                           │
+│  1. 生成参数样本 (LHS)                                               │
+│  2. 提取forcing数据 (full/calibration/validation时段)               │
+│  3. 运行Noah-MP (1000组参数 × 全时段)                                │
+│  4. 预处理数据 (calibration时段)                                     │
+│  5. 训练LSTM emulator                                               │
+└─────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                       run_calibration.sh                            │
+│  1. 使用emulator进行参数校准 (calibration时段)                       │
+│  2. 用校准参数运行Noah-MP验证 (全时段)                               │
+│  3. 分析并绘图 (区分calibration/validation时段)                      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Target Variables (29 Total)
-
-### Energy Balance (5 variables)
-Core energy conservation: `FSA - FIRA = HFX + LH + GRDFLX`
-
-```
-FSA       - Total absorbed SW radiation (W/m²)
-FIRA      - Total net LW radiation to atmosphere (W/m²)
-HFX       - Total sensible heat to atmosphere (W/m²) ⭐
-LH        - Total latent heat to atmosphere (W/m²) ⭐
-GRDFLX    - Heat flux into the soil (W/m²)
-```
-
-### Energy Components (9 variables)
-Detailed energy budget breakdown
-
-```
-SAV, SAG   - Solar radiation (canopy/ground)
-IRC, IRG   - Net LW radiation (canopy/ground)
-SHC, SHG   - Sensible heat (canopy/ground)
-EVC, EVG   - Evaporation heat (canopy/ground)
-GHV        - Ground heat to soil
-```
-
-### Water Fluxes (5 variables)
-Water cycle fluxes
-
-```
-ECAN             - Canopy water evaporation rate (mm/s)
-ETRAN            - Transpiration rate (mm/s)
-EDIR             - Direct soil evaporation rate (mm/s)
-UGDRNOFF_RATE    - Underground runoff rate (mm/day)
-SFCRNOFF_RATE    - Surface runoff rate (mm/day)
-```
-
-### Water Storage (5 variables)
-Water storage state variables
-
-```
-SOIL_M    - Volumetric soil moisture Layer 1 (m³/m³) ⭐
-SOIL_M_L2 - Volumetric soil moisture Layer 2 (m³/m³)
-SOIL_M_L3 - Volumetric soil moisture Layer 3 (m³/m³)
-SOIL_M_L4 - Volumetric soil moisture Layer 4 (m³/m³)
-CANLIQ    - Canopy liquid water content (mm)
-```
-
-### Temperature (5 variables)
-Temperature state variables
-
-```
-SOIL_T    - Soil temperature Layer 1 (K)
-SOIL_T_L2 - Soil temperature Layer 2 (K)
-TG        - Ground temperature (K)
-TV        - Vegetation temperature (K)
-TRAD      - Surface radiative temperature (K)
-```
-
-⭐ = Main target variables (SOIL_M, LH, HFX)
-
-## Quick Start
-
-### 1. Environment Setup
+## 快速开始
 
 ```bash
-conda activate dfm  # Or your Python environment
-pip install torch numpy pandas xarray matplotlib scikit-learn
+cd /home/petrichor/ymwang/snap/Emulator-based_calibration/calibration-BCI
+
+# 完整模型训练流程
+bash run_model_training.sh --samples 1000 --parallel 4
+
+# 完整校准流程
+bash run_calibration.sh --num_calibration 10 --max_iter 100
 ```
 
-### 2. Data Preprocessing
+## 时间范围配置
 
-Extract and normalize all 31 variables from Noah-MP simulation outputs:
+在 `config_forward_comprehensive.py` 中定义：
+
+| 时段 | 范围 | 用途 |
+|------|------|------|
+| FULL | 2015-07-30 ~ 2017-07-30 | Noah-MP运行、验证 |
+| CALIBRATION | 2015-07-30 ~ 2016-07-29 | emulator训练、参数校准 |
+| VALIDATION | 2016-07-30 ~ 2017-07-30 | 独立验证 |
+
+## 详细步骤
+
+### 模型训练 (`run_model_training.sh`)
 
 ```bash
-python 01_data_preprocessing_forward_comprehensive.py
+# 完整运行
+bash run_model_training.sh
+
+# 跳过已完成步骤
+bash run_model_training.sh --skip-param-gen --skip-forcing
+bash run_model_training.sh --skip-noahmp
+bash run_model_training.sh --skip-preprocess --skip-train
+
+# 可选参数
+--samples N      # 参数样本数 (默认1000)
+--parallel N     # 并行数 (默认4)
 ```
 
-**Output:** `data/processed_data_forward_comprehensive.pkl`
+**输出文件：**
+- `data/raw/param/noahmp_param_sets.txt` - 参数样本
+- `data/raw/forcing/forcing_panama_*.nc` - forcing数据
+- `data/raw/sim_results/sample_*/` - Noah-MP输出
+- `data/processed_data_forward_comprehensive.pkl` - 训练数据
+- `results_forward_comprehensive/*/` - 训练好的模型
 
-### 3. Model Training
-
-Train the comprehensive LSTM emulator with integrated validation:
+### 参数校准 (`run_calibration.sh`)
 
 ```bash
-python 02_train_forward_comprehensive.py
+# 完整运行
+bash run_calibration.sh
+
+# 指定模型目录
+bash run_calibration.sh --model_dir results_forward_comprehensive/AttentionLSTM_xxx/
+
+# 调整校准参数
+bash run_calibration.sh --num_calibration 20 --max_iter 200
+
+# 跳过步骤
+bash run_calibration.sh --skip-calibration  # 使用已有校准结果
+bash run_calibration.sh --skip-noahmp       # 跳过验证运行
 ```
 
-**Outputs** (saved to timestamped directory, e.g., `results_forward_comprehensive/AttentionLSTM_20251116_143022_dim-512_layer-2/`):
-- `best_model.pth` - Trained model weights
-- `config.json` - Complete model configuration and metrics
-- `validation_metrics.json` - Detailed metrics for all 31 variables
-- `training_history.png` - Training and validation loss curves
-- `validation_scatter_main.png` - Scatter plots for SOIL_M, LH, HFX
-- `validation_scatter_all.png` - Scatter plots for all variables
-- `loss_history.npz` - Training metrics
+**输出文件：**
+- `calibration_results/*/calibration_1/` - 校准结果
+  - `calibrated_parameters.csv` - 校准后参数
+  - `calibration_result.json` - 详细metrics
+- `validation_results/*/` - 验证结果
+  - `validation_metrics_by_period.csv` - 分时段metrics
+  - `timeseries_*.png/pdf` - 时序对比图
+  - `scatter_*.png/pdf` - 散点图
+  - `metrics_*.png/pdf` - metrics对比图
 
-### 4. Detailed Validation (Time Series)
+## SATDK参数处理
 
-Generate detailed time series comparison plots for specific test samples:
+SATDK参数在不同阶段使用不同形式：
 
+| 阶段 | 值形式 | 说明 |
+|------|--------|------|
+| 参数样本生成 | 原始值 | `[8.9e-06, 5e-04]` |
+| TBL文件生成 | 原始值 | 直接写入Noah-MP配置 |
+| emulator训练 | log10值 | 自动转换 `→ [-5.05, -3.3]` |
+| 参数校准 | log10值 | 使用`SATDK(log)` bounds |
+| 校准结果转换 | log→原始 | `10^x` 转换回物理值 |
+
+**value_bounds.csv 格式：**
+```csv
+variable,Lower bound,Upper bound
+SATDK,8.90E-06,5.00E-04
+SATDK(log),-5.05,-3.3
+```
+
+## 单独运行各步骤
+
+### 生成参数样本
 ```bash
-# Validate samples 0-4 from validation set
-python 03_validation.py \
-  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_143022_dim-512_layer-2 \
-  --sample 0 5
-
-# Validate single sample
-python 03_validation.py \
-  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_143022_dim-512_layer-2 \
-  --sample 0 1
-
-# Validate all test samples (use -1 for end)
-python 03_validation.py \
-  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_143022_dim-512_layer-2 \
-  --sample 0 -1
+cd noahmp/TBL_generator
+python3 generate_samples.py
 ```
 
-**Outputs** (saved to `model_dir/validation_timeseries/`):
-- `timeseries_sample_*_main.png` - Time series plots for SOIL_M, LH, HFX
-- `timeseries_sample_*_all.png` - Time series plots for all variables
-- `validation_metrics_summary.json` - Metrics for each validated sample
-
-### 5. Inference
-
-Run predictions with new forcing data and parameters:
-
+### 提取forcing数据
 ```bash
-# Single parameter set (no observations)
-python 04_inference.py \
-  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_143022_dim-512_layer-2 \
-  --forcing data/raw/forcing/forcing_sample_1.nc \
-  --params data/raw/param/test_params.txt \
-  --output predictions.csv \
-  --plot
+# 全时段
+python3 extract_forcing_data.py --daily \
+    --start_date 2015-07-30 --end_date 2017-07-30 \
+    --output data/raw/forcing/forcing_panama_daily_full.nc
 
-# With observations for validation
-python 04_inference.py \
-  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_143022_dim-512_layer-2 \
-  --forcing data/raw/forcing/forcing_sample_1.nc \
-  --params data/raw/param/test_params.txt \
-  --obs data/obs/observations.csv \
-  --output predictions.csv \
-  --plot
+# 校准时段
+python3 extract_forcing_data.py --daily \
+    --start_date 2015-07-30 --end_date 2016-07-29 \
+    --output data/raw/forcing/forcing_panama_daily_calibration.nc
 ```
 
-### 6. Parameter Calibration (New!)
-
-Calibrate NoahMP parameters using observations and get multiple results for ensemble prediction:
-
+### 数据预处理
 ```bash
-# Get top 5 calibration results for ensemble prediction
-python 06_calibration_applying_emulator.py \
-  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_171820_dim-512_layer-2 \
-  --forcing data/raw/forcing/forcing_sample_1.nc \
-  --obs data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv \
-  --bounds value_bounds.csv \
-  --num_calibration 5 \
-  --output calibration_results
+# 全时段
+python3 01_data_preprocessing_forward_comprehensive.py
 
-# Get top 10 results for comprehensive ensemble
-python 06_calibration_applying_emulator.py \
-  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_171820_dim-512_layer-2 \
-  --forcing data/raw/forcing/forcing_sample_1.nc \
-  --obs data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv \
-  --bounds value_bounds.csv \
-  --num_calibration 10 \
-  --max_iter 200
+# 校准时段 (用于训练emulator)
+python3 01_data_preprocessing_forward_comprehensive.py --calibration
 ```
 
-**Key Feature**: Returns top N calibration results for:
-- Ensemble prediction (average multiple calibrations)
-- Uncertainty quantification (ensemble spread)
-- Sensitivity analysis (parameter variability)
-
-See `CALIBRATION_USAGE_GUIDE.md` for detailed usage and examples.
-
-### 7. Conservation Validation
-
-Validate physical conservation of energy and water:
-
+### 训练emulator
 ```bash
-python 05_comprehensive_conservation_validation.py \
-  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_143022_dim-512_layer-2 \
-  --n_samples 20 \
-  --sample_detail 0
+python3 02_train_forward_comprehensive.py
 ```
 
-## Configuration
+### 参数校准
+```bash
+python3 06_calibration_applying_emulator_multiple_runs.py \
+    --model_dir results_forward_comprehensive/AttentionLSTM_xxx/ \
+    --forcing data/raw/forcing/forcing_panama_daily_calibration.nc \
+    --obs data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv \
+    --bounds value_bounds.csv \
+    --num_calibration 10 \
+    --max_iter 100
+```
 
-Edit `config_forward_comprehensive.py` to customize:
+## 变量说明
 
-### Model Architecture
+### Forcing变量 (8个)
+| 变量 | 描述 |
+|------|------|
+| T2D | 2m气温 (K) |
+| Q2D | 2m比湿 (kg/kg) |
+| PSFC | 地表气压 (Pa) |
+| U2D, V2D | 2m风速分量 (m/s) |
+| LWDOWN | 下行长波辐射 (W/m²) |
+| SWDOWN | 下行短波辐射 (W/m²) |
+| RAINRATE | 降水率 (mm/s) |
+
+### 目标变量 (29个)
+- **能量平衡** (5): FSA, FIRA, HFX, LH, GRDFLX
+- **水通量** (5): ECAN, ETRAN, EDIR, UGDRNOFF_RATE, SFCRNOFF_RATE
+- **水储量** (5): SOIL_M (L1-L4), CANLIQ
+- **温度** (5): SOIL_T (L1-L2), TG, TV, TRAD
+- **能量分量** (9): SAV, SAG, IRC, IRG, SHC, SHG, EVC, EVG, GHV
+
+### 校准参数 (9个)
+| 参数 | 描述 | 范围 |
+|------|------|------|
+| VCMX25 | 最大羧化速率 | [30, 120] |
+| HVT | 冠层顶高 | [9, 55] |
+| HVB | 冠层底高 | [0.1, 15] |
+| CWPVT | 冠层风参数 | [0.15, 5.35] |
+| Z0MVT | 动量粗糙度 | [0.3, 2] |
+| WLTSMC | 凋萎含水量 | [0.02, 0.26] |
+| REFSMC | 参考含水量 | [0.15, 0.45] |
+| MAXSMC | 饱和含水量 | [0.45, 0.75] |
+| SATDK | 饱和导水率 | [8.9e-6, 5e-4] |
+
+## 模型配置
+
+编辑 `config_forward_comprehensive.py`：
 
 ```python
+TEMPORAL_RESOLUTION = 'daily'  # 'daily' 或 '30min'
+
 MODEL_CONFIG = {
-    'model_type': 'AttentionLSTM',  # Options: 'LSTM', 'BiLSTM', 'AttentionLSTM'
-    'hidden_dim': 512,              # Hidden layer size
-    'num_layers': 2,                # Number of LSTM layers
-    'dropout': 0.3,                 # Dropout rate
-    'param_embedding_dim': 128,     # Parameter embedding dimension
+    'model_type': 'AttentionLSTM',
+    'hidden_dim': 1536,
+    'num_layers': 3,
+    'dropout': 0.3,
 }
-```
 
-### Training Parameters
-
-```python
 TRAINING_CONFIG = {
     'learning_rate': 0.0005,
-    'batch_size': 8,
-    'num_epochs': 1000,
-    'patience': 100,               # Early stopping patience
-    'train_ratio': 0.8,
+    'batch_size': 16,
+    'num_epochs': 100,
+    'patience': 50,
 }
 ```
 
-### Loss Weights
+## 文件结构
 
-Prioritize critical variables:
-
-```python
-OUTPUT_WEIGHTS = {
-    # Energy balance (highest priority)
-    'FSA': 2.0, 'FIRA': 2.0, 'HFX': 2.0, 'LH': 2.0, 'GRDFLX': 2.0,
-
-    # Energy components
-    'SAV': 1.5, 'SAG': 1.5, 'IRC': 1.5, ...
-
-    # Water fluxes
-    'ECAN': 2.0, 'ETRAN': 2.0, 'EDIR': 2.0,
-
-    # Water storage
-    'SOIL_M': 2.0, 'SOIL_M_L2': 1.5, ...
-}
+```
+calibration-BCI/
+├── run_model_training.sh          # 模型训练工作流
+├── run_calibration.sh             # 校准工作流
+├── config_forward_comprehensive.py # 配置文件
+│
+├── 数据准备
+│   ├── extract_forcing_data.py
+│   └── noahmp/TBL_generator/
+│       ├── generate_samples.py
+│       ├── noahmp_apply_samples.py
+│       └── value_bounds.csv
+│
+├── 训练
+│   ├── 01_data_preprocessing_forward_comprehensive.py
+│   └── 02_train_forward_comprehensive.py
+│
+├── 校准验证
+│   ├── 06_calibration_applying_emulator_multiple_runs.py
+│   ├── 07_calibration_validation_enhanced.py
+│   └── src/convert_calibrated_params.py
+│
+└── 数据目录
+    ├── data/raw/forcing/          # forcing数据
+    ├── data/raw/sim_results/      # Noah-MP输出
+    ├── data/obs/                  # 观测数据
+    ├── calibration_results/       # 校准结果
+    └── validation_results/        # 验证结果
 ```
 
-## Input Data Requirements
+## 常见问题
 
-### Parameters
-9 Noah-MP parameters in text file (space-separated):
-```
-CWPVT VCMX25 MP DLEAF Z0MVT HVT HVB BEXP SMCMAX
-2.5   50.0   9  0.04  0.8   20.0 0.5 5.3  0.45
-```
-
-### Forcing Data
-NetCDF file with hourly/sub-daily data:
-- `LWFORC` - Longwave radiation (W/m²)
-- `SWFORC` - Shortwave radiation (W/m²)
-- `RAINRATE` - Precipitation rate (mm/s)
-- `T2MV` - 2m air temperature (K)
-- `time` - Time coordinate
-
-Data is automatically aggregated to daily timesteps.
-
-### Observations (Optional)
-CSV file with date column and target variables:
-```
-date,SOIL_M,LH,HFX,...
-2015-07-30,0.25,120.5,45.2,...
-2015-07-31,0.24,118.3,43.1,...
-```
-
-**For Calibration**: The project includes observation data at:
-- `data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv` (daily aggregated SOIL_M, LH, HFX)
-
-## Model Performance
-
-### Expected Metrics
-
-**Main Target Variables:**
-- SOIL_M: R² > 0.90
-- LH: R² > 0.85
-- HFX: R² > 0.85
-
-**Conservation:**
-- Energy balance RMSE: 10-30 W/m² (Good-Excellent)
-- Water balance RMSE: 0.1-0.5 mm/day (Good-Excellent)
-
-### Validation Metrics
-
-For each variable, the model computes:
-- **R²** - Coefficient of determination
-- **RMSE** - Root mean squared error
-- **PBIAS** - Percent bias
-
-## Conservation Validation
-
-### Energy Conservation
-
-**Primary Balance:**
-```
-FSA - FIRA = HFX + LH + GRDFLX
-```
-
-**Component Checks:**
-- Canopy: `SAV = IRC + SHC + EVC`
-- Ground: `SAG = IRG + SHG + EVG + GHV`
-
-### Water Conservation
-
-**Primary Balance:**
-```
-ΔStorage = Precipitation - ET - Runoff
-```
-
-**Components:**
-- Total ET = `ECAN + ETRAN + EDIR` (converted to mm/day)
-- Total Runoff = `UGDRNOFF_RATE + SFCRNOFF_RATE` (mm/day)
-- Storage = Sum of all soil layers + canopy + snow
-
-## Troubleshooting
-
-### Memory Issues
-
-Reduce batch size or model size:
-```python
-TRAINING_CONFIG = {'batch_size': 4}  # Reduce from 8
-MODEL_CONFIG = {'hidden_dim': 256}   # Reduce from 512
-```
-
-### Poor Performance
-
-1. Check data quality (no NaN/Inf values)
-2. Increase loss weights for underperforming variables
-3. Increase model capacity (hidden_dim, num_layers)
-4. Train longer (increase patience)
-
-### Training Not Converging
-
-1. Reduce learning rate (try 0.0001)
-2. Check data normalization
-3. Reduce model complexity
-4. Adjust loss weights
-
-## Advanced Usage
-
-### Custom Variable Selection
-
-Modify `TARGET_VARIABLES` in config to predict specific variables:
-
-```python
-# Example: Energy balance only
-TARGET_VARIABLES = ENERGY_BALANCE_TARGETS
-```
-
-### Multi-Parameter Set Inference
-
-Process multiple parameter sets simultaneously:
-
+**Q: 预处理时提示timesteps不匹配**
 ```bash
-python 04_inference.py \
-  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_143022_dim-512_layer-2 \
-  --forcing data/raw/forcing/forcing_sample_1.nc \
-  --params data/raw/param/noahmp_param_sets.txt \
-  --output predictions.csv \
-  --max_samples 10 \
-  --obs observations.csv \
-  --plot
+# 确保forcing数据覆盖Noah-MP输出的时间范围
+python3 extract_forcing_data.py --daily \
+    --start_date 2015-07-30 --end_date 2017-07-30 \
+    --output data/raw/forcing/forcing_panama_daily_full.nc
 ```
 
-### Parameter Calibration with Ensemble
-
-Calibrate parameters and generate ensemble predictions for uncertainty quantification:
-
-```bash
-# Step 1: Run calibration to get top 10 parameter sets
-python 06_calibration_applying_emulator.py \
-  --model_dir results_forward_comprehensive/AttentionLSTM_20251116_171820_dim-512_layer-2 \
-  --forcing data/raw/forcing/forcing_sample_1.nc \
-  --obs data/obs/Panama_BCI_obs_2015-07-30_2016-07-29.csv \
-  --bounds value_bounds.csv \
-  --num_calibration 10 \
-  --output calibration_results
-
-# Step 2: Analyze ensemble results
-# See CALIBRATION_USAGE_GUIDE.md for Python code to:
-# - Compare parameter variability across calibrations
-# - Create ensemble mean and spread predictions
-# - Identify well-constrained vs. poorly-constrained parameters
+**Q: 训练时内存不足**
+```python
+# 在config中减小batch_size或使用daily分辨率
+TRAINING_CONFIG = {'batch_size': 8}
+TEMPORAL_RESOLUTION = 'daily'
 ```
 
-## File Outputs
-
-### Training Output Structure
-
-Each training run creates a timestamped directory:
+**Q: 校准后SATDK值异常**
 ```
-results_forward_comprehensive/
-└── AttentionLSTM_20251116_143022_dim-512_layer-2/
-    ├── best_model.pth                    # Model weights
-    ├── config.json                       # Configuration + metrics
-    ├── validation_metrics.json           # Detailed metrics
-    ├── training_history.png              # Loss curves
-    ├── validation_scatter_main.png       # Main variables scatter
-    ├── validation_scatter_all.png        # All variables scatter
-    ├── loss_history.npz                  # Training history
-    └── train_val_indices.npz             # Train/val split indices
+# 检查value_bounds.csv中是否同时有SATDK和SATDK(log)两行
+# 校准使用log bounds，转换时自动还原为物理值
 ```
-
-### Validation Output Structure
-
-Time series validation creates detailed plots:
-```
-results_forward_comprehensive/
-└── AttentionLSTM_20251116_143022_dim-512_layer-2/
-    └── validation_timeseries/
-        ├── timeseries_sample_0_main.png   # Main vars for sample 0
-        ├── timeseries_sample_0_all.png    # All vars for sample 0
-        ├── timeseries_sample_1_main.png   # Main vars for sample 1
-        ├── timeseries_sample_1_all.png    # All vars for sample 1
-        └── validation_metrics_summary.json # Metrics for all samples
-```
-
-### Inference Outputs
-
-```
-predictions.csv                    # Predicted time series
-predictions_metrics.json           # Performance metrics (if obs provided)
-predictions.png                    # Time series plots
-predictions_scatter.png            # Scatter plots (if obs provided)
-```
-
-### Calibration Outputs
-
-```
-calibration_results/
-├── ensemble_summary.json          # Summary of all calibration results
-├── calibration_1/                 # Best calibration result
-│   ├── calibrated_parameters.csv
-│   ├── calibration_result.json
-│   ├── predictions_comparison.csv
-│   └── calibration_results.png
-├── calibration_2/                 # 2nd best result
-└── ...                            # Additional results based on --num_calibration
-```
-
-## Model Architectures
-
-### LSTM
-Standard LSTM with parameter embedding.
-
-### BiLSTM
-Bidirectional LSTM for capturing future context (useful for gap-filling).
-
-### Attention-LSTM (Recommended)
-LSTM with attention mechanism for better long-term dependencies and parameter sensitivity.
-
-## Citation
-
-If you use this emulator in your research, please cite:
-- Noah-MP land surface model
-- This emulator framework (paper in preparation)
-
-## Version History
-
-- **v2.1** (2025-11-20): Added parameter calibration with ensemble prediction support
-- **v2.0** (2025-11-16): Comprehensive model with 31 variables, integrated validation
-- **v1.0** (2025-11-13): Initial 3-variable model
-
-## Support
-
-For issues or questions:
-1. Check this README
-2. Review configuration in `config_forward_comprehensive.py`
-3. Run `python test_comprehensive_model.py` for diagnostics
-4. Open an issue on the repository
 
 ---
-
-**Last Updated:** 2025-11-20
-**Status:** Production Ready
-**Model Variants:** LSTM, BiLSTM, Attention-LSTM
-**Target Variables:** 29 (comprehensive output)
-**Conservation:** Full Energy + Water
-**Calibration:** Ensemble-based with uncertainty quantification
+**Last Updated:** 2024-12-18

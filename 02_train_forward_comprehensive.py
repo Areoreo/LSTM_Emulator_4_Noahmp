@@ -214,12 +214,12 @@ def plot_scatter(predictions, targets, var_names, metrics, save_dir, focus_vars=
             ax = axes[ax_idx]
 
             # Scatter plot
-            ax.scatter(targ_flat[:, i], pred_flat[:, i], alpha=0.3, s=10, edgecolors='none')
+            ax.scatter(targ_flat[:, i], pred_flat[:, i], alpha=0.3, s=10, edgecolors='none', label='1:1 Line')
 
             # 1:1 line
             min_val = min(targ_flat[:, i].min(), pred_flat[:, i].min())
             max_val = max(targ_flat[:, i].max(), pred_flat[:, i].max())
-            ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='1:1 Line')
+            ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2)
 
             # Add metrics
             m = metrics[var_name]
@@ -231,7 +231,7 @@ def plot_scatter(predictions, targets, var_names, metrics, save_dir, focus_vars=
             ax.set_ylabel(f'Predicted {var_name}', fontsize=12)
             ax.set_title(f'{var_name}', fontsize=14, fontweight='bold')
             ax.grid(True, alpha=0.3)
-            ax.legend(fontsize=10)
+            # ax.legend(fontsize=10)
             ax.set_aspect('equal', adjustable='box')
 
             ax_idx += 1

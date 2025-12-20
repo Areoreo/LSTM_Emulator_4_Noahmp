@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""
+Convert calibrated parameters from CSV to TBL generator format
+"""
+
+import sys
+import argparse
+import pandas as pd
+import numpy as np
+
+
+def convert_params(input_csv, output_txt):
+    """
+    Convert calibrated_parameters.csv to space-delimited format
+    
+    Handles log-transformed parameters (SATDK) by applying inverse transformation.
+    
+    Parameters:
+    - input_csv: Path to calibrated_parameters.csv
+    - output_txt: Path to output text file
+    """
+    try:
+        df = pd.read_csv(input_csv)
+        
+        # Filter only calibrated parameters
+        calibrated = df[df['is_calibrated'] == 'Yes']
+        
+        # Create output in space-delimited format with header
+        params = calibrated['parameter'].tolist()
+        values = calibrated['calibrated'].tolist()
+        
+        # Apply inverse transformation for log-transformed parameters
+        transformed_values = []
+        for param, value in zip(params, values):
+            # SATDK parameters are log10-transformed, need to convert back
+            if 'SATDK' in param:
+                actual_value = 10 ** value
+                transformed_values.append(actual_value)
+                print(f"  Transformed {param}: log({value:.6f}) -> {actual_value:.6e}")
+            else:
+                transformed_values.append(value)
+        
+        # Write header and values
+        with open(output_txt, 'w') as f:
+            f.write(' '.join(params) + '\n')
+            f.write(' '.join([f'{v:.6e}' if 'SATDK' in params[i] else f'{v:.6f}' if isinstance(v, float) else str(v) 
+                             for i, v in enumerate(transformed_values)]) + '\n')
+        
+        print(f"Converted {len(params)} calibrated parameters")
+        return 0
+        
+    except Exception as e:
+        print(f"Error converting parameters: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Convert calibrated parameters CSV to TBL format')
+    parser.add_argument('--input', required=True, help='Input calibrated_parameters.csv file')
+    parser.add_argument('--output', required=True, help='Output text file')
+    
+    args = parser.parse_args()
+    
+    return convert_params(args.input, args.output)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

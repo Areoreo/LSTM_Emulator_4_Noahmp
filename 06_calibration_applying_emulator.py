@@ -92,7 +92,7 @@ def load_model(model_dir, device='cpu'):
     return model, data_dict, config_dict
 
 
-def load_forcing_data(forcing_file):
+def load_forcing_data(forcing_file, time_range=None):
     """Load and process forcing data from NetCDF"""
     print(f"\nLoading forcing data from: {forcing_file}")
 
@@ -312,6 +312,9 @@ def calculate_normalized_rmse(predictions, observations, variable_names):
 def load_parameter_bounds(bounds_file, param_names):
     """
     Load parameter bounds from CSV file
+    
+    Note: For SATDK parameters, uses 'SATDK(log)' bounds since the emulator
+    works with log-transformed values.
 
     Args:
         bounds_file: Path to bounds CSV
@@ -322,12 +325,29 @@ def load_parameter_bounds(bounds_file, param_names):
     """
     bounds_df = pd.read_csv(bounds_file)
 
+    # Parameters that need log bounds (emulator uses log-transformed values)
+    LOG_BOUND_PARAMS = ['SATDK']
+
     bounds = []
     for param_name in param_names:
         # Remove suffix (_EBF, _CL, _SCL) to match bounds file
         base_name = param_name.split('_')[0]
-
-        if base_name in bounds_df['variable'].values:
+        
+        # For log-transformed parameters, use the (log) bounds
+        if base_name in LOG_BOUND_PARAMS:
+            log_name = f"{base_name}(log)"
+            if log_name in bounds_df['variable'].values:
+                row = bounds_df[bounds_df['variable'] == log_name].iloc[0]
+                bounds.append([row['Lower bound'], row['Upper bound']])
+                print(f"  {param_name}: using log bounds [{row['Lower bound']}, {row['Upper bound']}]")
+            else:
+                print(f"  Warning: No log bounds for {param_name}, using original bounds")
+                if base_name in bounds_df['variable'].values:
+                    row = bounds_df[bounds_df['variable'] == base_name].iloc[0]
+                    bounds.append([row['Lower bound'], row['Upper bound']])
+                else:
+                    bounds.append([-6.0, -2.0])  # Default log bounds for SATDK
+        elif base_name in bounds_df['variable'].values:
             row = bounds_df[bounds_df['variable'] == base_name].iloc[0]
             bounds.append([row['Lower bound'], row['Upper bound']])
         else:

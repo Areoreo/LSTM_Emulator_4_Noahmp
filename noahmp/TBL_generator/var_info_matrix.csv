@@ -1,0 +1,10 @@
+column_name,section,variable,type
+VCMX25_EBF,&noahmp_modis_parameters,VCMX25,2
+HVT_EBF,&noahmp_modis_parameters,HVT,2
+HVB_EBF,&noahmp_modis_parameters,HVB,2
+CWPVT_EBF,&noahmp_modis_parameters,CWPVT,2
+Z0MVT_EBF,&noahmp_modis_parameters,Z0MVT,2
+WLTSMC_CL,&noahmp_soil_stas_parameters,WLTSMC,12
+REFSMC_CL,&noahmp_soil_stas_parameters,REFSMC,12
+MAXSMC_CL,&noahmp_soil_stas_parameters,MAXSMC,12
+SATDK_CL,&noahmp_soil_stas_parameters,SATDK,12

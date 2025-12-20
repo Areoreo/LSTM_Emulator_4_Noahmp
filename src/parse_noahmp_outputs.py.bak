@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""
+Parse Noah-MP NetCDF outputs to CSV format
+Aggregates half-hourly data to daily means to match observation frequency
+"""
+
+import sys
+import argparse
+import xarray as xr
+import pandas as pd
+import numpy as np
+
+
+def parse_netcdf_to_csv(nc_file, csv_file, aggregate_daily=True):
+    """
+    Parse Noah-MP NetCDF output to CSV
+    
+    Parameters:
+    - nc_file: Path to NetCDF file
+    - csv_file: Path to output CSV file
+    - aggregate_daily: If True, aggregate to daily means
+    """
+    print(f'Parsing {nc_file}...')
+    
+    # Open NetCDF file with explicit engine
+    try:
+        ds = xr.open_dataset(nc_file, engine='netcdf4')
+    except:
+        print('Trying h5netcdf engine...')
+        ds = xr.open_dataset(nc_file, engine='h5netcdf')
+    
+    # Extract timestamps from 'Times' variable
+    times_bytes = ds['Times'].values
+    times_str = [t.decode('utf-8') if isinstance(t, bytes) else str(t) for t in times_bytes]
+    times = pd.to_datetime(times_str, format='%Y-%m-%d_%H:%M:%S')
+    
+    # Create DataFrame with timestamp
+    data = {'timestamp': times}
+    
+    # Extract variables we need (squeeze out spatial dimensions)
+    # Target variables: SOIL_M, LH (LE), HFX (H)
+    var_mapping = {
+        'HFX': 'HFX',    # Sensible heat flux (W/m²) - matches observation
+        'LH': 'LH',      # Latent heat flux (W/m²) - matches observation
+        'SOIL_M': 'SOIL_M',  # Soil moisture - matches observation
+        'GPP': 'GPP',    # Gross Primary Production (optional)
+        'ECAN': 'ECAN',  # Canopy evaporation (mm/s)
+        'ETRAN': 'ETRAN',# Transpiration (mm/s)
+        'EDIR': 'EDIR'   # Direct evaporation (mm/s)
+    }
+    
+    for noahmp_var, standard_var in var_mapping.items():
+        if noahmp_var in ds.variables:
+            # Get the variable data
+            var_data = ds[noahmp_var].values
+            
+            # Squeeze out spatial dimensions (south_north, west_east)
+            while len(var_data.shape) > 1:
+                var_data = var_data.squeeze()
+            
+            data[standard_var] = var_data
+            print(f'  Added {noahmp_var} as {standard_var}, shape: {var_data.shape}')
+    
+    # Calculate total ET from components (mm/s to mm/day)
+    if all(k in data for k in ['ECAN', 'ETRAN', 'EDIR']):
+        # These are in mm/s, convert to mm/day and sum
+        data['ET'] = (data['ECAN'] + data['ETRAN'] + data['EDIR']) * 86400
+        print(f'  Calculated ET from components (mm/day)')
+    
+    # Create DataFrame
+    df = pd.DataFrame(data)
+    
+    print(f'  Raw data shape: {df.shape}')
+    print(f'  Time range: {df.timestamp.min()} to {df.timestamp.max()}')
+    
+    if aggregate_daily:
+        # Aggregate to daily means to match observation frequency
+        df['date'] = df['timestamp'].dt.date
+        
+        # Aggregate numeric columns
+        agg_dict = {col: 'mean' for col in df.columns if col not in ['timestamp', 'date']}
+        
+        if agg_dict:
+            daily_df = df.groupby('date').agg(agg_dict).reset_index()
+            
+            # Rename date to timestamp for consistency
+            daily_df['timestamp'] = pd.to_datetime(daily_df['date'])
+            daily_df = daily_df.drop('date', axis=1)
+            
+            # Reorder columns to have timestamp first
+            cols = ['timestamp'] + [col for col in daily_df.columns if col != 'timestamp']
+            daily_df = daily_df[cols]
+            
+            print(f'  Daily aggregated shape: {daily_df.shape}')
+            df = daily_df
+    
+    # Save to CSV
+    df.to_csv(csv_file, index=False)
+    print(f'  Saved to {csv_file}')
+    print(f'  Final columns: {list(df.columns)}')
+    print(f'  Sample data:')
+    print(df.head(3))
+    print()
+    
+    ds.close()
+    return df
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Parse Noah-MP NetCDF outputs to CSV')
+    parser.add_argument('--input', required=True, help='Input NetCDF file')
+    parser.add_argument('--output', required=True, help='Output CSV file')
+    parser.add_argument('--no-daily', action='store_true', help='Do not aggregate to daily means')
+    
+    args = parser.parse_args()
+    
+    try:
+        parse_netcdf_to_csv(args.input, args.output, aggregate_daily=not args.no_daily)
+        print('Success!')
+        return 0
+    except Exception as e:
+        print(f'Error: {e}', file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

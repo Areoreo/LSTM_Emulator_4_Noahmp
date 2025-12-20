@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""
+Convert calibrated parameters from CSV to TBL generator format
+"""
+
+import sys
+import argparse
+import pandas as pd
+
+
+def convert_params(input_csv, output_txt):
+    """
+    Convert calibrated_parameters.csv to space-delimited format
+    
+    Parameters:
+    - input_csv: Path to calibrated_parameters.csv
+    - output_txt: Path to output text file
+    """
+    try:
+        df = pd.read_csv(input_csv)
+        
+        # Filter only calibrated parameters
+        calibrated = df[df['is_calibrated'] == 'Yes']
+        
+        # Create output in space-delimited format with header
+        params = calibrated['parameter'].tolist()
+        values = calibrated['calibrated'].tolist()
+        
+        # Write header and values
+        with open(output_txt, 'w') as f:
+            f.write(' '.join(params) + '\n')
+            f.write(' '.join([f'{v:.6f}' if isinstance(v, float) else str(v) for v in values]) + '\n')
+        
+        print(f"Converted {len(params)} calibrated parameters")
+        return 0
+        
+    except Exception as e:
+        print(f"Error converting parameters: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Convert calibrated parameters CSV to TBL format')
+    parser.add_argument('--input', required=True, help='Input calibrated_parameters.csv file')
+    parser.add_argument('--output', required=True, help='Output text file')
+    
+    args = parser.parse_args()
+    
+    return convert_params(args.input, args.output)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -1,0 +1,42 @@
+wrfinput_flnm: '/home/petrichor/ymwang/snap/Noah-mp/tropical_data_single_point/Panama_single_point/hrldas_setup_single_point.nc'
+ Problems finding global attribute: ISLAKE; setting to -1
+wrfinput_flnm: '/home/petrichor/ymwang/snap/Noah-mp/tropical_data_single_point/Panama_single_point/hrldas_setup_single_point.nc'
+ Did not find MAPFAC_MX, only needed for iopt_run=5
+ Did not find MAPFAC_MY, only needed for iopt_run=5
+netcdf_flnm: '/home/petrichor/ymwang/snap/Noah-mp/tropical_data_single_point/Panama_single_point/hrldas_setup_single_point.nc'
+LDASIN TITLE attribute: Created from HRLDAS create_point_data
+WARNING:  LDASIN file has a perverse version identifier
+ldasin_version =        0
+LDASIN MMNINLU attribute: MODIFIED_IGBP_MODIS_NOAH                                                                                                                                                                                                                                        
+layer_bottom(1:nsoil) =    0.1000   0.4000   1.0000   2.0000
+layer_top(1:nsoil)    =    0.0000   0.1000   0.4000   1.0000
+Soil depth =     0.100000    0.300000    0.600000    1.000000
+ k, dst_centerpoint(k) =            1   5.00000007E-02
+ k, dst_centerpoint(k) =            2  0.250000000    
+ k, dst_centerpoint(k) =            3  0.700000048    
+ k, dst_centerpoint(k) =            4   1.50000000    
+
+ k, src_centerpoint(k) =            1   5.00000007E-02
+ k, src_centerpoint(k) =            2  0.250000000    
+ k, src_centerpoint(k) =            3  0.699999988    
+ k, src_centerpoint(k) =            4   1.50000000    
+(Near) match for destination layer:  Taking destination layer at  0.0500 from source layer at  0.0500
+(Near) match for destination layer:  Taking destination layer at  0.2500 from source layer at  0.2500
+(Near) match for destination layer:  Taking destination layer at  0.7000 from source layer at  0.7000
+(Near) match for destination layer:  Taking destination layer at  1.5000 from source layer at  1.5000
+ k, dst_centerpoint(k) =            1   5.00000007E-02
+ k, dst_centerpoint(k) =            2  0.250000000    
+ k, dst_centerpoint(k) =            3  0.700000048    
+ k, dst_centerpoint(k) =            4   1.50000000    
+
+ k, src_centerpoint(k) =            1   5.00000007E-02
+ k, src_centerpoint(k) =            2  0.250000000    
+ k, src_centerpoint(k) =            3  0.699999988    
+ k, src_centerpoint(k) =            4   1.50000000    
+(Near) match for destination layer:  Taking destination layer at  0.0500 from source layer at  0.0500
+(Near) match for destination layer:  Taking destination layer at  0.2500 from source layer at  0.2500
+(Near) match for destination layer:  Taking destination layer at  0.7000 from source layer at  0.7000
+(Near) match for destination layer:  Taking destination layer at  1.5000 from source layer at  1.5000
+ NTIME =        17520 KHOUR=        8760 dtbl =    1800.00000    
+ ***DATE=2015-07-30_17:00:00 266.10001   2.00000 Write restart at 2015-07-30_17
+ output_flnm = "./output//RESTART.2015073017_DOMAIN1"
